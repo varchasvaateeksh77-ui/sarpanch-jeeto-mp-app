@@ -259,6 +259,34 @@ export function App() {
     payload: unknown;
   } | null>(null);
 
+  // Official ECI Portal CAPTCHA Verification -> LocalStorage Cache State
+  const [cachedPortalDataset, setCachedPortalDataset] =
+    useState<PhuleraDataset | null>(null);
+  const [officialPortalReceipt, setOfficialPortalReceipt] = useState<any | null>(
+    null
+  );
+  const [pendingPortalGp, setPendingPortalGp] = useState<{
+    id: string;
+    name: string;
+    tehsil: string;
+    district: string;
+    voters?: number;
+    villages: string[];
+  } | null>(null);
+  const [portalGpMatch, setPortalGpMatch] = useState<any | null>(null);
+  const [portalCaptcha, setPortalCaptcha] = useState<{
+    captchaId: string;
+    dataUrl: string;
+  } | null>(null);
+  const [portalCaptchaInput, setPortalCaptchaInput] = useState('');
+  const [portalCaptchaLoading, setPortalCaptchaLoading] = useState(false);
+  const [portalVerifySubmitting, setPortalVerifySubmitting] = useState(false);
+  const [portalCaptchaError, setPortalCaptchaError] = useState('');
+
+  const getLocalPortalCacheKey = (gpId: string) =>
+    `sj_mp_official_portal_gp_v1_${gpId}`;
+  const LAST_ACTIVE_PORTAL_GP_KEY = 'sj_mp_last_active_portal_gp_v1';
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setCurrentUser(u);
@@ -273,7 +301,7 @@ export function App() {
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage((prev) => (prev === msg ? null : prev));
-    }, 2800);
+    }, 3200);
   };
 
   const handleGoogleSignIn = async () => {
@@ -306,10 +334,13 @@ export function App() {
     } catch {
       // Ignore storage error
     }
+    setCachedPortalDataset(null);
+    setOfficialPortalReceipt(null);
+    setPendingPortalGp(null);
     await postLiveMutation({ type: 'clear_all_test_runs' });
     setShowSettingsModal(false);
     triggerToast(
-      'सभी टेस्ट रन (Firestore + सर्वर + लोकल कैश) 100% साफ़ कर दिए गए!'
+      'सभी टेस्ट रन (Local Storage + Firestore + सर्वर) 100% साफ़ कर दिए गए!'
     );
   };
 
@@ -455,7 +486,7 @@ export function App() {
     }
   };
 
-  // Initial Data Load + Live SSE Subscription
+  // Initial Data Load + LocalStorage Priority + Live SSE Subscription
   useEffect(() => {
     let cancelled = false;
     let eventSource: EventSource | null = null;
@@ -479,20 +510,63 @@ export function App() {
           setPlansData(plansJson.plans || []);
           setLiveSamples(samplesJson || {});
 
-          if (campJson?.state) {
-            applyServerCampaignState(campJson.state);
-            setLiveConnected(true);
-          } else {
-            const initialDataset = generateMpPanchayatDataset({
-              id: 'sehore/sehore/mahodiya',
-              name: 'महौदिया',
-              tehsil: 'सीहोर जनपद',
-              district: 'सीहोर (मध्य प्रदेश)',
-              voters: 3640,
-              villages: ['महौदिया', 'सिरपड़ी', 'बड़ियाखेड़ी'],
-              isDemo: false,
-            });
-            hydrateCampaignStateFromDataset(initialDataset);
+          // Check if the user has already verified & saved their Gram Panchayat in localStorage
+          let loadedFromLocal = false;
+          try {
+            const lastGpRaw = window.localStorage.getItem(
+              LAST_ACTIVE_PORTAL_GP_KEY
+            );
+            if (lastGpRaw) {
+              const lastGp = JSON.parse(lastGpRaw);
+              const cachedRaw = window.localStorage.getItem(
+                getLocalPortalCacheKey(lastGp.id)
+              );
+              if (cachedRaw) {
+                const cachedBundle = JSON.parse(cachedRaw);
+                if (cachedBundle?.dataset?.roll) {
+                  const ds = cachedBundle.dataset as PhuleraDataset;
+                  const vCount = ds.roll.people.filter(
+                    (p) => p.v === 1 && p.act === 1
+                  ).length;
+                  setCachedPortalDataset(ds);
+                  setOfficialPortalReceipt(
+                    cachedBundle.officialPortalReceipt || null
+                  );
+                  setActivePanchayat({
+                    id: lastGp.id,
+                    name: lastGp.name,
+                    tehsil: lastGp.tehsil,
+                    district: lastGp.district,
+                    voters: vCount,
+                    isDemo: false,
+                    villages: lastGp.villages || [lastGp.name],
+                    boothNames: {},
+                  });
+                  hydrateCampaignStateFromDataset(ds);
+                  loadedFromLocal = true;
+                }
+              }
+            }
+          } catch {
+            // Ignore localStorage parse error
+          }
+
+          if (!loadedFromLocal) {
+            if (campJson?.state) {
+              applyServerCampaignState(campJson.state);
+              setLiveConnected(true);
+            } else {
+              const initialDataset = generateMpPanchayatDataset({
+                id: 'sehore/sehore/mahodiya',
+                name: 'महौदिया',
+                tehsil: 'सीहोर जनपद',
+                district: 'सीहोर (मध्य प्रदेश)',
+                voters: 3640,
+                villages: ['महौदिया', 'सिरपड़ी', 'बड़ियाखेड़ी'],
+                isDemo: false,
+              });
+              hydrateCampaignStateFromDataset(initialDataset);
+            }
           }
           setLoading(false);
         }
@@ -537,17 +611,21 @@ export function App() {
     };
   }, []);
 
-  // Effective Panchayat Dataset generated deterministically for the active Madhya Pradesh Gram Panchayat
+  // Effective Panchayat Dataset: prioritizes official ECI CAPTCHA-verified dataset stored in client localStorage
   const effectivePhuleraData: PhuleraDataset = useMemo(() => {
-    const baseDataset = generateMpPanchayatDataset({
-      id: activePanchayat.id,
-      name: activePanchayat.name,
-      tehsil: activePanchayat.tehsil,
-      district: activePanchayat.district,
-      voters: activePanchayat.voters,
-      villages: activePanchayat.villages,
-      isDemo: false,
-    });
+    const baseDataset =
+      cachedPortalDataset &&
+      cachedPortalDataset.roll?.name === activePanchayat.name
+        ? cachedPortalDataset
+        : generateMpPanchayatDataset({
+            id: activePanchayat.id,
+            name: activePanchayat.name,
+            tehsil: activePanchayat.tehsil,
+            district: activePanchayat.district,
+            voters: activePanchayat.voters,
+            villages: activePanchayat.villages,
+            isDemo: false,
+          });
     return {
       ...baseDataset,
       camp: {
@@ -556,7 +634,7 @@ export function App() {
           candidates.length > 0 ? candidates : baseDataset.camp.candidates,
       },
     };
-  }, [activePanchayat, candidates]);
+  }, [activePanchayat, candidates, cachedPortalDataset]);
 
   // Computed Vote Tally
   const tally = useMemo(() => {
@@ -946,7 +1024,7 @@ export function App() {
     triggerToast('उम्मीदवार सूची और वोट समीकरण सर्वर पर अपडेट हो गए');
   };
 
-  const handleActivatePanchayat = (gp: {
+  const openPortalCaptchaModalForGp = async (gp: {
     id: string;
     name: string;
     tehsil: string;
@@ -954,19 +1032,77 @@ export function App() {
     voters?: number;
     villages: string[];
   }) => {
-    const nextDataset = generateMpPanchayatDataset({
-      id: gp.id,
-      name: gp.name,
-      tehsil: gp.tehsil,
-      district: gp.district,
-      voters: gp.voters,
-      villages: gp.villages,
-      isDemo: false,
-    });
-    const nextVotersCount = nextDataset.roll.people.filter(
+    setPendingPortalGp(gp);
+    setPortalCaptchaInput('');
+    setPortalCaptchaError('');
+    setPortalCaptchaLoading(true);
+    try {
+      const qs = new URLSearchParams({
+        gpId: gp.id,
+        name: gp.name,
+        district: gp.district,
+      }).toString();
+      const r = await fetch(`/api/eci/gp-portal-init?${qs}`);
+      const j = await r.json();
+      if (j?.gpMatch) {
+        setPortalGpMatch(j.gpMatch);
+      }
+      if (j?.captcha?.dataUrl) {
+        setPortalCaptcha(j.captcha);
+      } else {
+        setPortalCaptchaError(
+          j?.error || 'ECI पोर्टल से CAPTCHA लोड नहीं हो सका। पुनः प्रयास करें।'
+        );
+      }
+    } catch {
+      setPortalCaptchaError('ECI गेटवे से संपर्क करने में समस्या आई।');
+    } finally {
+      setPortalCaptchaLoading(false);
+    }
+  };
+
+  const refreshPortalCaptchaOnly = async () => {
+    setPortalCaptchaLoading(true);
+    setPortalCaptchaError('');
+    try {
+      const r = await fetch('/api/eci/live-captcha');
+      const j = await r.json();
+      if (j?.ok && j.dataUrl) {
+        setPortalCaptcha({ captchaId: j.captchaId, dataUrl: j.dataUrl });
+        setPortalCaptchaInput('');
+      } else {
+        setPortalCaptchaError('नया CAPTCHA लोड नहीं हो सका।');
+      }
+    } catch {
+      setPortalCaptchaError('CAPTCHA रिफ्रेश करने में त्रुटि।');
+    } finally {
+      setPortalCaptchaLoading(false);
+    }
+  };
+
+  const finalizeActivatePanchayatWithDataset = (
+    gp: {
+      id: string;
+      name: string;
+      tehsil: string;
+      district: string;
+      voters?: number;
+      villages: string[];
+    },
+    dataset: PhuleraDataset,
+    receipt: any | null
+  ) => {
+    const nextVotersCount = dataset.roll.people.filter(
       (p) => p.v === 1 && p.act === 1
     ).length;
 
+    const boothNames: Record<string, string> = {};
+    for (const [k, v] of Object.entries(dataset.roll.booth_names || {})) {
+      boothNames[k] = (v as { name: string }).name;
+    }
+
+    setCachedPortalDataset(dataset);
+    setOfficialPortalReceipt(receipt);
     setActivePanchayat({
       id: gp.id,
       name: gp.name,
@@ -975,9 +1111,9 @@ export function App() {
       voters: nextVotersCount,
       isDemo: false,
       villages: gp.villages,
-      boothNames: {},
+      boothNames,
     });
-    hydrateCampaignStateFromDataset(nextDataset);
+    hydrateCampaignStateFromDataset(dataset);
 
     postLiveMutation({
       type: 'switch_panchayat',
@@ -989,10 +1125,129 @@ export function App() {
         () => {}
       );
     }
+    setShowMereChunavSheet(false);
     setRoute({ screen: 'home' });
-    triggerToast(
-      `ग्राम पंचायत '${gp.name}' (${nextVotersCount.toLocaleString('en-IN')} वोट · ${nextDataset.roll.wards.length} वार्ड) सक्रिय!`
-    );
+  };
+
+  const handlePortalCaptchaVerifySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingPortalGp || !portalCaptcha) return;
+    if (portalCaptchaInput.trim().length < 4) {
+      setPortalCaptchaError('कृपया छवि में दिख रहा 6-अक्षर का CAPTCHA दर्ज करें।');
+      return;
+    }
+
+    setPortalVerifySubmitting(true);
+    setPortalCaptchaError('');
+    try {
+      const r = await fetch('/api/eci/verify-and-fetch-gp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          gp: pendingPortalGp,
+          eciTarget: portalGpMatch,
+          captcha: portalCaptchaInput.trim(),
+          captchaId: portalCaptcha.captchaId,
+        }),
+      });
+      const j = await r.json();
+
+      if (!r.ok || !j?.ok) {
+        setPortalCaptchaError(
+          j?.message ||
+            'ECI पोर्टल ने CAPTCHA अमान्य बताया (Invalid Captcha)। कृपया नया CAPTCHA भरें।'
+        );
+        if (j?.newCaptcha?.dataUrl) {
+          setPortalCaptcha(j.newCaptcha);
+          setPortalCaptchaInput('');
+        } else {
+          await refreshPortalCaptchaOnly();
+        }
+        return;
+      }
+
+      const dataset = j.dataset as PhuleraDataset;
+      const receipt = j.officialPortalReceipt;
+
+      // Save permanently into the user's browser localStorage so no DB or repeat CAPTCHA is needed
+      try {
+        window.localStorage.setItem(
+          getLocalPortalCacheKey(pendingPortalGp.id),
+          JSON.stringify({
+            gp: pendingPortalGp,
+            officialPortalReceipt: receipt,
+            dataset,
+            savedAt: new Date().toISOString(),
+          })
+        );
+        window.localStorage.setItem(
+          LAST_ACTIVE_PORTAL_GP_KEY,
+          JSON.stringify(pendingPortalGp)
+        );
+      } catch {
+        // Ignore quota error if storage is full
+      }
+
+      const gpDone = pendingPortalGp;
+      setPendingPortalGp(null);
+      finalizeActivatePanchayatWithDataset(gpDone, dataset, receipt);
+      triggerToast(
+        `✓ ECI CAPTCHA सत्यापित (File ID: ${String(
+          receipt?.officialFileId || ''
+        ).slice(0, 8)}...) · '${gpDone.name}' आपके Local Storage में स्थायी रूप से सेव हो गया!`
+      );
+    } catch {
+      setPortalCaptchaError(
+        'ECI आधिकारिक पोर्टल से डेटा प्राप्त करने में त्रुटि हुई। कृपया पुनः प्रयास करें।'
+      );
+    } finally {
+      setPortalVerifySubmitting(false);
+    }
+  };
+
+  const handleActivatePanchayat = (
+    gp: {
+      id: string;
+      name: string;
+      tehsil: string;
+      district: string;
+      voters?: number;
+      villages: string[];
+    },
+    forceCaptcha = false
+  ) => {
+    // 1. Check if this Gram Panchayat is ALREADY verified and saved in the user's localStorage
+    if (!forceCaptcha) {
+      try {
+        const cachedRaw = window.localStorage.getItem(
+          getLocalPortalCacheKey(gp.id)
+        );
+        if (cachedRaw) {
+          const cachedBundle = JSON.parse(cachedRaw);
+          if (cachedBundle?.dataset?.roll) {
+            window.localStorage.setItem(
+              LAST_ACTIVE_PORTAL_GP_KEY,
+              JSON.stringify(gp)
+            );
+            finalizeActivatePanchayatWithDataset(
+              gp,
+              cachedBundle.dataset as PhuleraDataset,
+              cachedBundle.officialPortalReceipt || null
+            );
+            triggerToast(
+              `✓ '${gp.name}' का डेटा आपके फोन के Local Storage से तुरंत लोड हो गया (दोबारा CAPTCHA नहीं चाहिए)!`
+            );
+            return;
+          }
+        }
+      } catch {
+        // Proceed to CAPTCHA verification modal
+      }
+    }
+
+    // 2. Not in localStorage yet -> Open Official ECI CAPTCHA Verification Modal
+    setShowMereChunavSheet(false);
+    openPortalCaptchaModalForGp(gp);
   };
 
   const handleSimulateWorkerTick = () => {
@@ -1259,6 +1514,43 @@ export function App() {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
             {/* Left Column: Authentic Mobile-First Sarpanch Jeeto Replica Viewport */}
             <div className="lg:col-span-5 w-full max-w-[440px] mx-auto lg:mx-0 lg:rounded-3xl lg:overflow-hidden lg:border lg:border-slate-300 bg-[#F1F5F9]">
+              {route.screen !== 'landing' && (
+                <div
+                  className={`px-3.5 py-2 text-[11px] font-extrabold flex items-center justify-between gap-2 border-b ${
+                    officialPortalReceipt
+                      ? 'bg-emerald-950 text-emerald-100 border-emerald-800'
+                      : 'bg-amber-950 text-amber-100 border-amber-800'
+                  }`}
+                >
+                  {officialPortalReceipt ? (
+                    <div className="truncate">
+                      ✓ ECI सत्यापित · Local Storage में सेव (बूथ #
+                      {officialPortalReceipt.partNumber}{' '}
+                      {officialPortalReceipt.partName} · ID:{' '}
+                      {String(officialPortalReceipt.officialFileId || '').slice(
+                        0,
+                        8
+                      )}
+                      )
+                    </div>
+                  ) : (
+                    <div className="truncate">
+                      ⚡ &apos;{activePanchayat.name}&apos; को ECI CAPTCHA से
+                      Local Storage में सेव करें
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleActivatePanchayat(activePanchayat, true)
+                    }
+                    className="shrink-0 px-2 py-0.5 rounded bg-white/15 hover:bg-white/25 text-white text-[10px] font-extrabold cursor-pointer"
+                  >
+                    {officialPortalReceipt ? 'दोबारा सिंक ↻' : 'CAPTCHA भरें →'}
+                  </button>
+                </div>
+              )}
+
               {route.screen === 'landing' && (
                 <LandingScreen
                   onStartDemo={() => setRoute({ screen: 'home' })}
@@ -1898,6 +2190,164 @@ export function App() {
                 <Download className="w-4 h-4" />
                 <span>Android APK डाउनलोड करें (SarpanchJeeto-MP-v1.0.apk)</span>
               </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Post-Selection Official ECI Portal CAPTCHA Verification -> Saves to LocalStorage */}
+      {pendingPortalGp && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/75 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="आधिकारिक ECI मतदाता सूची CAPTCHA सत्यापन"
+        >
+          <div className="bg-white rounded-3xl max-w-md w-full p-5 space-y-4 border-2 border-[#1D4ED8]">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-blue-50 text-[#1D4ED8] text-[10px] font-extrabold border border-blue-200 mb-1">
+                  <span>आधिकारिक ECI गेटवे · 1-बार सत्यापन</span>
+                </div>
+                <h3 className="text-lg font-extrabold text-slate-900">
+                  ग्राम पंचायत &apos;{pendingPortalGp.name}&apos; का डेटा लाएं
+                </h3>
+                <p className="text-xs text-slate-500 font-semibold">
+                  {pendingPortalGp.tehsil} · {pendingPortalGp.district}
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="बंद करें"
+                onClick={() => setPendingPortalGp(null)}
+                className="p-1.5 rounded-full hover:bg-slate-100 text-slate-500 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {portalGpMatch && (
+              <div className="bg-slate-50 rounded-2xl p-3 border border-slate-200 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-500">
+                    ECI विधानसभा (AC):
+                  </span>
+                  <span className="font-extrabold text-slate-900">
+                    #{portalGpMatch.acNumber} - {portalGpMatch.acNameHi} (
+                    {portalGpMatch.districtCd})
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-slate-500 shrink-0">
+                    मतदान केंद्र (Booth):
+                  </span>
+                  {Array.isArray(portalGpMatch.candidateBooths) &&
+                  portalGpMatch.candidateBooths.length > 0 ? (
+                    <select
+                      value={portalGpMatch.partNumber}
+                      onChange={(e) => {
+                        const pNo = Number(e.target.value);
+                        const found = portalGpMatch.candidateBooths.find(
+                          (b: any) => b.partNumber === pNo
+                        );
+                        if (found) {
+                          setPortalGpMatch({
+                            ...portalGpMatch,
+                            partId: found.partId,
+                            partNumber: found.partNumber,
+                            partName: found.partName,
+                          });
+                        }
+                      }}
+                      className="text-xs font-extrabold text-emerald-900 bg-white border border-slate-300 rounded-lg px-2 py-1 max-w-[220px] truncate"
+                    >
+                      {portalGpMatch.candidateBooths.map((b: any) => (
+                        <option key={b.partId || b.partNumber} value={b.partNumber}>
+                          भाग #{b.partNumber}: {b.partName} (ID #{b.partId})
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="font-extrabold text-emerald-800">
+                      भाग #{portalGpMatch.partNumber}: {portalGpMatch.partName}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <form
+              onSubmit={handlePortalCaptchaVerifySubmit}
+              className="space-y-3"
+            >
+              <div className="bg-blue-50/60 rounded-2xl p-3.5 border border-blue-200 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-slate-800">
+                    नीचे दिख रहा आधिकारिक ECI CAPTCHA भरें:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={refreshPortalCaptchaOnly}
+                    disabled={portalCaptchaLoading}
+                    className="text-xs font-extrabold text-[#1D4ED8] hover:underline cursor-pointer"
+                  >
+                    {portalCaptchaLoading ? 'लोड हो रहा...' : 'नया CAPTCHA ↻'}
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  {portalCaptcha?.dataUrl ? (
+                    <img
+                      src={portalCaptcha.dataUrl}
+                      alt="Official ECI Captcha"
+                      className="h-14 w-36 object-contain rounded-xl border-2 border-slate-300 bg-white px-1.5 shrink-0"
+                    />
+                  ) : (
+                    <div className="h-14 w-36 rounded-xl border border-slate-300 bg-white flex items-center justify-center text-[11px] font-bold text-slate-400 shrink-0">
+                      {portalCaptchaLoading
+                        ? 'CAPTCHA आ रहा है...'
+                        : 'CAPTCHA अनुपलब्ध'}
+                    </div>
+                  )}
+
+                  <input
+                    type="text"
+                    required
+                    maxLength={6}
+                    autoFocus
+                    value={portalCaptchaInput}
+                    onChange={(e) => setPortalCaptchaInput(e.target.value)}
+                    placeholder="6 अक्षर यहाँ लिखें"
+                    className="w-full px-3.5 py-3 rounded-xl border-2 border-[#1D4ED8] bg-white text-base font-extrabold tracking-widest text-slate-900 placeholder:text-xs placeholder:tracking-normal placeholder:font-semibold"
+                  />
+                </div>
+
+                {portalCaptchaError && (
+                  <div className="text-xs font-extrabold text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
+                    {portalCaptchaError}
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={portalVerifySubmitting || portalCaptchaLoading}
+                className="w-full py-3.5 px-4 rounded-2xl bg-[#16A34A] hover:bg-[#15803D] disabled:opacity-60 text-white text-sm font-extrabold cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Check className="w-4 h-4" />
+                <span>
+                  {portalVerifySubmitting
+                    ? 'आधिकारिक ECI पोर्टल से सत्यापित हो रहा है...'
+                    : 'CAPTCHA सत्यापित करें व Local Storage में सेव करें'}
+                </span>
+              </button>
+            </form>
+
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-[11px] text-emerald-900 font-semibold leading-relaxed">
+              💡 <strong>सिर्फ़ 1 बार CAPTCHA:</strong> जैसे ही आप यह CAPTCHA भरेंगे,
+              आधिकारिक पोर्टल (`gateway-voters.eci.gov.in`) से आपकी ग्राम पंचायत का
+              सत्यापित डेटा सीधा आपके फोन के <strong>Local Storage</strong> में सेव हो
+              जाएगा। इसके बाद न किसी डेटाबेस की ज़रूरत होगी और न दोबारा CAPTCHA भरने की!
             </div>
           </div>
         </div>

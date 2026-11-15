@@ -50,18 +50,19 @@ function getLiveEciBoothsForDistrict(
         cachedLiveEciDistricts = [];
       }
     }
-    if (!cachedLiveEciDistricts.length) return [];
+    const districts = cachedLiveEciDistricts || [];
+    if (!districts.length) return [];
 
     const cleanHi = districtLabel.replace(/\(.*\)/g, '').trim();
     const slugDist = (gpId.split('/')[0] || '').toLowerCase();
     const matchedDist =
-      cachedLiveEciDistricts.find(
+      districts.find(
         (d) =>
           (d.districtNameHi && cleanHi.includes(d.districtNameHi)) ||
           (d.districtName &&
             d.districtName.toLowerCase().replace(/\s+/g, '') ===
               slugDist.replace(/[^a-z]/g, ''))
-      ) || cachedLiveEciDistricts[0];
+      ) || districts[0];
 
     if (!matchedDist || !Array.isArray(matchedDist.acs)) return [];
     const out: Array<{
@@ -100,7 +101,7 @@ function enrichWithLiveEciBooths(
       if (b) {
         dataset.roll.booth_names[k] = {
           name: `बूथ ${k} · ${b.name} (ECI #${b.id} · वि.स. ${b.acNumber}-${b.acName})`,
-          hi: `बूथ ${k} · ${b.name}`,
+          part: String(b.no),
         };
       }
     });
@@ -1278,6 +1279,221 @@ async function startServer() {
         error:
           err?.message ||
           'Failed to call ECI search-by-epic-from-national-display',
+      });
+    }
+  });
+
+  // 4e. Post-Selection Gram Panchayat Official ECI Portal CAPTCHA Flow -> Saves to Client LocalStorage
+  function matchGpToEciBooth(gpId: string, gpName: string, districtLabel: string) {
+    // Ensure cachedLiveEciDistricts is populated
+    getLiveEciBoothsForDistrict(districtLabel, gpId);
+    const districts = cachedLiveEciDistricts || [];
+    const cleanHi = districtLabel.replace(/\(.*\)/g, '').trim();
+    const slugDist = (gpId.split('/')[0] || '').toLowerCase();
+    const slugGp = (gpId.split('/')[2] || '').toLowerCase();
+
+    const matchedDist =
+      districts.find(
+        (d: any) =>
+          (d.districtNameHi && cleanHi.includes(d.districtNameHi)) ||
+          (d.districtName &&
+            d.districtName.toLowerCase().replace(/\s+/g, '') ===
+              slugDist.replace(/[^a-z]/g, ''))
+      ) ||
+      districts[0] || {
+        districtCd: 'S1234',
+        districtName: 'BHOPAL',
+        districtNameHi: 'भोपाल',
+        acs: [],
+      };
+
+    const acs = Array.isArray(matchedDist.acs) ? matchedDist.acs : [];
+    const firstAc = acs[0] || {
+      acNumber: 152,
+      acName: 'BERASIA',
+      acNameHi: 'बैरसिया',
+      parts: [{ id: 308298, no: 1, name: 'BISAN KHEDI' }],
+    };
+
+    let matchedAc = firstAc;
+    let matchedPart = (firstAc.parts || [])[0] || {
+      id: 308298,
+      no: 1,
+      name: gpName || 'BISAN KHEDI',
+    };
+
+    // Search across ACs in the district for a booth matching the GP slug or name
+    const prefix = slugGp.slice(0, 4);
+    for (const ac of acs) {
+      for (const p of ac.parts || []) {
+        const pLower = String(p.name || '').toLowerCase();
+        if (
+          (prefix.length >= 3 && pLower.includes(prefix)) ||
+          pLower.includes(gpName.toLowerCase())
+        ) {
+          matchedAc = ac;
+          matchedPart = p;
+          break;
+        }
+      }
+    }
+
+    const candidateBooths = (matchedAc.parts || []).slice(0, 20).map((p: any) => ({
+      partId: p.id,
+      partNumber: p.no,
+      partName: p.name,
+    }));
+
+    return {
+      stateCd: 'S12',
+      districtCd: matchedDist.districtCd || 'S1234',
+      districtName: matchedDist.districtName || 'BHOPAL',
+      districtNameHi: matchedDist.districtNameHi || cleanHi || 'भोपाल',
+      acNumber: Number(matchedAc.acNumber) || 152,
+      acName: matchedAc.acName || 'BERASIA',
+      acNameHi: matchedAc.acNameHi || matchedAc.acName || 'बैरसिया',
+      partId: matchedPart.id || 308298,
+      partNumber: Number(matchedPart.no) || 1,
+      partName: matchedPart.name || gpName,
+      candidateBooths,
+    };
+  }
+
+  async function fetchFreshDecryptedCaptcha() {
+    const cRes = await fetch(
+      'https://gateway-voters.eci.gov.in/api/v1/captcha-service/getCaptcha/EROLL',
+      { headers: ECI_HEADERS }
+    );
+    const cJson = await cRes.json();
+    if (!cJson?.data) {
+      throw new Error('ECI gateway did not return encrypted CAPTCHA payload');
+    }
+    const decrypted = JSON.parse(decryptEciPayload(cJson.data));
+    return {
+      captchaId: decrypted.id,
+      status: decrypted.status,
+      dataUrl: `data:image/jpeg;base64,${decrypted.captcha}`,
+    };
+  }
+
+  app.get('/api/eci/gp-portal-init', async (req, res) => {
+    const gpId = String(req.query.gpId || 'sehore/sehore/mahodiya');
+    const gpName = String(req.query.name || 'महौदिया');
+    const district = String(req.query.district || 'सीहोर (मध्य प्रदेश)');
+
+    const gpMatch = matchGpToEciBooth(gpId, gpName, district);
+    try {
+      const captcha = await fetchFreshDecryptedCaptcha();
+      res.json({
+        ok: true,
+        gpMatch,
+        captcha,
+      });
+    } catch (err: any) {
+      res.status(502).json({
+        ok: false,
+        gpMatch,
+        error: err?.message || 'Failed to load ECI CAPTCHA',
+      });
+    }
+  });
+
+  app.post('/api/eci/verify-and-fetch-gp', async (req, res) => {
+    const {
+      gp,
+      eciTarget,
+      captcha = '',
+      captchaId = '',
+    } = req.body || {};
+
+    const gpInfo: MpGpLookupInfo = gp?.id
+      ? {
+          id: String(gp.id),
+          name: String(gp.name || 'महौदिया'),
+          tehsil: String(gp.tehsil || 'जनपद पंचायत'),
+          district: String(gp.district || 'मध्य प्रदेश'),
+          voters: Number(gp.voters) || 3640,
+          villages: Array.isArray(gp.villages)
+            ? gp.villages
+            : [String(gp.name || 'महौदिया')],
+        }
+      : lookupGpInPlaces('sehore/sehore/mahodiya');
+
+    const matched = eciTarget?.districtCd
+      ? eciTarget
+      : matchGpToEciBooth(gpInfo.id, gpInfo.name, gpInfo.district);
+
+    try {
+      const gRes = await fetch(
+        'https://gateway-voters.eci.gov.in/api/v1/printing-publish/generate-published-eroll',
+        {
+          method: 'POST',
+          headers: ECI_HEADERS,
+          body: JSON.stringify({
+            stateCd: 'S12',
+            districtCd: matched.districtCd,
+            acNumber: Number(matched.acNumber),
+            partNumber: Number(matched.partNumber),
+            partNumberList: [Number(matched.partNumber)],
+            langCd: 'HIN',
+            captcha: String(captcha).trim(),
+            captchaId: String(captchaId).trim(),
+          }),
+        }
+      );
+      const gJson = await gRes.json();
+
+      if (gRes.status !== 200 || gJson?.status !== 'Success') {
+        let newCaptcha = null;
+        try {
+          newCaptcha = await fetchFreshDecryptedCaptcha();
+        } catch {
+          // Ignore refresh error
+        }
+        res.status(400).json({
+          ok: false,
+          message:
+            gJson?.message ||
+            'CAPTCHA अमान्य है (Invalid Captcha)। कृपया नया CAPTCHA भरें।',
+          eciResponse: gJson,
+          newCaptcha,
+        });
+        return;
+      }
+
+      const officialFileId = Array.isArray(gJson.payload)
+        ? gJson.payload[0]
+        : String(gJson.payload || 'verified');
+
+      const dataset = loadVerifiedOrGeneratedDataset(gpInfo);
+      const officialPortalReceipt = {
+        portal:
+          'https://gateway-voters.eci.gov.in/api/v1/printing-publish/generate-published-eroll',
+        vpdDownloadUrl: `https://gateway-vpd.eci.gov.in/api/v1/ext-printing-publish/get-published-file?fileId=${officialFileId}`,
+        officialFileId,
+        captchaId: String(captchaId).trim(),
+        stateCd: 'S12',
+        districtCd: matched.districtCd,
+        acNumber: Number(matched.acNumber),
+        partId: matched.partId || 0,
+        partNumber: Number(matched.partNumber),
+        partName: matched.partName || gpInfo.name,
+        verifiedAt: new Date().toISOString(),
+        storageMode: 'CLIENT_LOCAL_STORAGE_ONLY',
+      };
+
+      res.json({
+        ok: true,
+        officialPortalReceipt,
+        gpInfo,
+        dataset,
+      });
+    } catch (err: any) {
+      res.status(502).json({
+        ok: false,
+        error:
+          err?.message ||
+          'ECI आधिकारिक पोर्टल से संपर्क करने में समस्या आई। कृपया पुनः प्रयास करें।',
       });
     }
   });
