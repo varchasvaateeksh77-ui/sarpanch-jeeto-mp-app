@@ -1,0 +1,448 @@
+{
+  "fetchedAt": "2026-11-15T09:12:50.179Z",
+  "sourceUrl": "https://gateway-voters.eci.gov.in/api/v1/common/districts/S12",
+  "stateCode": "S12",
+  "count": 55,
+  "districts": [
+    {
+      "state": "S12",
+      "districtNo": "51",
+      "districtValue": "AGAR MALWA",
+      "districtValueHindi": "आगर मालवा",
+      "expiresIn": 86400,
+      "districtCd": "S1251"
+    },
+    {
+      "state": "S12",
+      "districtNo": "43",
+      "districtValue": "ALIRAJPUR",
+      "districtValueHindi": "आलीराजपुर",
+      "expiresIn": 86400,
+      "districtCd": "S1243"
+    },
+    {
+      "state": "S12",
+      "districtNo": "19",
+      "districtValue": "ANUPPUR",
+      "districtValueHindi": "अनूपपुर",
+      "expiresIn": 86400,
+      "districtCd": "S1219"
+    },
+    {
+      "state": "S12",
+      "districtNo": "8",
+      "districtValue": "ASHOK NAGAR",
+      "districtValueHindi": "अशोक नगर",
+      "expiresIn": 86400,
+      "districtCd": "S1208"
+    },
+    {
+      "state": "S12",
+      "districtNo": "25",
+      "districtValue": "BALAGHAT",
+      "districtValueHindi": "बालाघाट",
+      "expiresIn": 86400,
+      "districtCd": "S1225"
+    },
+    {
+      "state": "S12",
+      "districtNo": "42",
+      "districtValue": "BARWANI",
+      "districtValueHindi": "बड़वानी",
+      "expiresIn": 86400,
+      "districtCd": "S1242"
+    },
+    {
+      "state": "S12",
+      "districtNo": "29",
+      "districtValue": "BETUL",
+      "districtValueHindi": "बैतूल",
+      "expiresIn": 86400,
+      "districtCd": "S1229"
+    },
+    {
+      "state": "S12",
+      "districtNo": "3",
+      "districtValue": "BHIND",
+      "districtValueHindi": "भिण्ड",
+      "expiresIn": 86400,
+      "districtCd": "S1203"
+    },
+    {
+      "state": "S12",
+      "districtNo": "34",
+      "districtValue": "BHOPAL",
+      "districtValueHindi": "भोपाल",
+      "expiresIn": 86400,
+      "districtCd": "S1234"
+    },
+    {
+      "state": "S12",
+      "districtNo": "40",
+      "districtValue": "BURHANPUR",
+      "districtValueHindi": "बुरहानपुर",
+      "expiresIn": 86400,
+      "districtCd": "S1240"
+    },
+    {
+      "state": "S12",
+      "districtNo": "11",
+      "districtValue": "CHHATARPUR",
+      "districtValueHindi": "छतरपुर",
+      "expiresIn": 86400,
+      "districtCd": "S1211"
+    },
+    {
+      "state": "S12",
+      "districtNo": "28",
+      "districtValue": "CHHINDWARA",
+      "districtValueHindi": "छिन्दवाडा",
+      "expiresIn": 86400,
+      "districtCd": "S1228"
+    },
+    {
+      "state": "S12",
+      "districtNo": "12",
+      "districtValue": "DAMOH",
+      "districtValueHindi": "दमोह",
+      "expiresIn": 86400,
+      "districtCd": "S1212"
+    },
+    {
+      "state": "S12",
+      "districtNo": "5",
+      "districtValue": "DATIA",
+      "districtValueHindi": "दतिया",
+      "expiresIn": 86400,
+      "districtCd": "S1205"
+    },
+    {
+      "state": "S12",
+      "districtNo": "38",
+      "districtValue": "DEWAS",
+      "districtValueHindi": "देवास",
+      "expiresIn": 86400,
+      "districtCd": "S1238"
+    },
+    {
+      "state": "S12",
+      "districtNo": "45",
+      "districtValue": "DHAR",
+      "districtValueHindi": "धार",
+      "expiresIn": 86400,
+      "districtCd": "S1245"
+    },
+    {
+      "state": "S12",
+      "districtNo": "23",
+      "districtValue": "DINDORI",
+      "districtValueHindi": "डिण्डोरी",
+      "expiresIn": 86400,
+      "districtCd": "S1223"
+    },
+    {
+      "state": "S12",
+      "districtNo": "7",
+      "districtValue": "GUNA",
+      "districtValueHindi": "गुना",
+      "expiresIn": 86400,
+      "districtCd": "S1207"
+    },
+    {
+      "state": "S12",
+      "districtNo": "4",
+      "districtValue": "GWALIOR",
+      "districtValueHindi": "ग्वालियर",
+      "expiresIn": 86400,
+      "districtCd": "S1204"
+    },
+    {
+      "state": "S12",
+      "districtNo": "30",
+      "districtValue": "HARDA",
+      "districtValueHindi": "हरदा",
+      "expiresIn": 86400,
+      "districtCd": "S1230"
+    },
+    {
+      "state": "S12",
+      "districtNo": "46",
+      "districtValue": "INDORE",
+      "districtValueHindi": "इन्दौर",
+      "expiresIn": 86400,
+      "districtCd": "S1246"
+    },
+    {
+      "state": "S12",
+      "districtNo": "22",
+      "districtValue": "JABALPUR",
+      "districtValueHindi": "जबलपुर",
+      "expiresIn": 86400,
+      "districtCd": "S1222"
+    },
+    {
+      "state": "S12",
+      "districtNo": "44",
+      "districtValue": "JHABUA",
+      "districtValueHindi": "झाबुआ",
+      "expiresIn": 86400,
+      "districtCd": "S1244"
+    },
+    {
+      "state": "S12",
+      "districtNo": "21",
+      "districtValue": "KATNI",
+      "districtValueHindi": "कटनी",
+      "expiresIn": 86400,
+      "districtCd": "S1221"
+    },
+    {
+      "state": "S12",
+      "districtNo": "39",
+      "districtValue": "KHANDWA",
+      "districtValueHindi": "खण्डवा",
+      "expiresIn": 86400,
+      "districtCd": "S1239"
+    },
+    {
+      "state": "S12",
+      "districtNo": "41",
+      "districtValue": "KHARGONE",
+      "districtValueHindi": "खरगोन",
+      "expiresIn": 86400,
+      "districtCd": "S1241"
+    },
+    {
+      "state": "S12",
+      "districtNo": "55",
+      "districtValue": "MAIHAR",
+      "districtValueHindi": "मैहर",
+      "expiresIn": 86400,
+      "districtCd": "S1255"
+    },
+    {
+      "state": "S12",
+      "districtNo": "24",
+      "districtValue": "MANDLA",
+      "districtValueHindi": "मण्डला",
+      "expiresIn": 86400,
+      "districtCd": "S1224"
+    },
+    {
+      "state": "S12",
+      "districtNo": "49",
+      "districtValue": "MANDSOUR",
+      "districtValueHindi": "मन्दसौर",
+      "expiresIn": 86400,
+      "districtCd": "S1249"
+    },
+    {
+      "state": "S12",
+      "districtNo": "53",
+      "districtValue": "MAUGANJ",
+      "districtValueHindi": "मऊगंज",
+      "expiresIn": 86400,
+      "districtCd": "S1253"
+    },
+    {
+      "state": "S12",
+      "districtNo": "2",
+      "districtValue": "MORENA",
+      "districtValueHindi": "मुरैना",
+      "expiresIn": 86400,
+      "districtCd": "S1202"
+    },
+    {
+      "state": "S12",
+      "districtNo": "31",
+      "districtValue": "NARMADAPURAM",
+      "districtValueHindi": "नर्मदापुरम",
+      "expiresIn": 86400,
+      "districtCd": "S1231"
+    },
+    {
+      "state": "S12",
+      "districtNo": "27",
+      "districtValue": "NARSINGHPUR",
+      "districtValueHindi": "नरसिंहपुर",
+      "expiresIn": 86400,
+      "districtCd": "S1227"
+    },
+    {
+      "state": "S12",
+      "districtNo": "50",
+      "districtValue": "NEEMUCH",
+      "districtValueHindi": "नीमच",
+      "expiresIn": 86400,
+      "districtCd": "S1250"
+    },
+    {
+      "state": "S12",
+      "districtNo": "52",
+      "districtValue": "NIWARI",
+      "districtValueHindi": "निवाडी",
+      "expiresIn": 86400,
+      "districtCd": "S1252"
+    },
+    {
+      "state": "S12",
+      "districtNo": "54",
+      "districtValue": "PANDHURNA",
+      "districtValueHindi": "पाण्डुर्ना",
+      "expiresIn": 86400,
+      "districtCd": "S1254"
+    },
+    {
+      "state": "S12",
+      "districtNo": "13",
+      "districtValue": "PANNA",
+      "districtValueHindi": "पन्ना",
+      "expiresIn": 86400,
+      "districtCd": "S1213"
+    },
+    {
+      "state": "S12",
+      "districtNo": "32",
+      "districtValue": "RAISEN",
+      "districtValueHindi": "रायसेन",
+      "expiresIn": 86400,
+      "districtCd": "S1232"
+    },
+    {
+      "state": "S12",
+      "districtNo": "36",
+      "districtValue": "RAJGARH",
+      "districtValueHindi": "राजगढ",
+      "expiresIn": 86400,
+      "districtCd": "S1236"
+    },
+    {
+      "state": "S12",
+      "districtNo": "48",
+      "districtValue": "RATLAM",
+      "districtValueHindi": "रतलाम",
+      "expiresIn": 86400,
+      "districtCd": "S1248"
+    },
+    {
+      "state": "S12",
+      "districtNo": "15",
+      "districtValue": "REWA",
+      "districtValueHindi": "रीवा",
+      "expiresIn": 86400,
+      "districtCd": "S1215"
+    },
+    {
+      "state": "S12",
+      "districtNo": "9",
+      "districtValue": "SAGAR",
+      "districtValueHindi": "सागर",
+      "expiresIn": 86400,
+      "districtCd": "S1209"
+    },
+    {
+      "state": "S12",
+      "districtNo": "14",
+      "districtValue": "SATNA",
+      "districtValueHindi": "सतना",
+      "expiresIn": 86400,
+      "districtCd": "S1214"
+    },
+    {
+      "state": "S12",
+      "districtNo": "35",
+      "districtValue": "SEHORE",
+      "districtValueHindi": "सीहोर",
+      "expiresIn": 86400,
+      "districtCd": "S1235"
+    },
+    {
+      "state": "S12",
+      "districtNo": "26",
+      "districtValue": "SEONI",
+      "districtValueHindi": "सिवनी",
+      "expiresIn": 86400,
+      "districtCd": "S1226"
+    },
+    {
+      "state": "S12",
+      "districtNo": "18",
+      "districtValue": "SHAHADOL",
+      "districtValueHindi": "शहडोल",
+      "expiresIn": 86400,
+      "districtCd": "S1218"
+    },
+    {
+      "state": "S12",
+      "districtNo": "37",
+      "districtValue": "SHAJAPUR",
+      "districtValueHindi": "शाजापुर",
+      "expiresIn": 86400,
+      "districtCd": "S1237"
+    },
+    {
+      "state": "S12",
+      "districtNo": "1",
+      "districtValue": "SHEOPUR",
+      "districtValueHindi": "श्योपुर",
+      "expiresIn": 86400,
+      "districtCd": "S1201"
+    },
+    {
+      "state": "S12",
+      "districtNo": "6",
+      "districtValue": "SHIVPURI",
+      "districtValueHindi": "शिवपुरी",
+      "expiresIn": 86400,
+      "districtCd": "S1206"
+    },
+    {
+      "state": "S12",
+      "districtNo": "16",
+      "districtValue": "SIDHI",
+      "districtValueHindi": "सीधी",
+      "expiresIn": 86400,
+      "districtCd": "S1216"
+    },
+    {
+      "state": "S12",
+      "districtNo": "17",
+      "districtValue": "SINGRAULI",
+      "districtValueHindi": "सिंगरौली",
+      "expiresIn": 86400,
+      "districtCd": "S1217"
+    },
+    {
+      "state": "S12",
+      "districtNo": "10",
+      "districtValue": "TIKAMGARH",
+      "districtValueHindi": "टीकमगढ",
+      "expiresIn": 86400,
+      "districtCd": "S1210"
+    },
+    {
+      "state": "S12",
+      "districtNo": "47",
+      "districtValue": "UJJAIN",
+      "districtValueHindi": "उज्जैन",
+      "expiresIn": 86400,
+      "districtCd": "S1247"
+    },
+    {
+      "state": "S12",
+      "districtNo": "20",
+      "districtValue": "UMARIYA",
+      "districtValueHindi": "उमरिया",
+      "expiresIn": 86400,
+      "districtCd": "S1220"
+    },
+    {
+      "state": "S12",
+      "districtNo": "33",
+      "districtValue": "VIDISHA",
+      "districtValueHindi": "विदिशा",
+      "expiresIn": 86400,
+      "districtCd": "S1233"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "सरपंच जीतो (Sarpanch Jeeto) · Replica & Reverse Engineering Studio",
+  "description": "Full interactive Madhya Pradesh replica and reverse-engineering analysis of app.sarpanchjeeto.com covering all 55 MP districts, 313 Janpad Panchayats, Vanshavali family trees, MP voter slips, polling day tracker, and MPSEC Gram Panchayat data.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

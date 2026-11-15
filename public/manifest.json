@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "सरपंच जीतो · मध्य प्रदेश",
+  "short_name": "सरपंच जीतो",
+  "description": "मध्य प्रदेश ग्राम पंचायत चुनाव का ऐप: 55 ज़िले, परिवार वाइज़ वंशावली वोटर लिस्ट, घर-घर पर्ची और वोट का हिसाब।",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#1D4ED8",
+  "background_color": "#1E40AF",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

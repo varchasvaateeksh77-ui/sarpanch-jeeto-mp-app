@@ -1,0 +1,140 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll([
+        'uid',
+        'displayName',
+        'email',
+        'assignedPanchayatId',
+        'assignedPanchayatName',
+        'role',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'uid',
+        'displayName',
+        'email',
+        'assignedPanchayatId',
+        'assignedPanchayatName',
+        'role',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+      data.uid == request.auth.uid &&
+      data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+      data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+      data.assignedPanchayatId is string && data.assignedPanchayatId.size() >= 3 && data.assignedPanchayatId.size() <= 120 &&
+      data.assignedPanchayatName is string && data.assignedPanchayatName.size() >= 1 && data.assignedPanchayatName.size() <= 120 &&
+      data.role is string && (data.role == 'candidate' || data.role == 'worker') &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidClientCampaign(data) {
+      return data.keys().hasAll([
+        'ownerId',
+        'panchayatId',
+        'panchayatName',
+        'district',
+        'tehsil',
+        'isLockedToPanchayat',
+        'version',
+        'leaningMap',
+        'turnoutMap',
+        'contactMap',
+        'casteMap',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ownerId',
+        'panchayatId',
+        'panchayatName',
+        'district',
+        'tehsil',
+        'isLockedToPanchayat',
+        'version',
+        'leaningMap',
+        'turnoutMap',
+        'contactMap',
+        'casteMap',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
+      data.ownerId == request.auth.uid &&
+      data.panchayatId is string && data.panchayatId.size() >= 3 && data.panchayatId.size() <= 120 &&
+      data.panchayatName is string && data.panchayatName.size() >= 1 && data.panchayatName.size() <= 120 &&
+      data.district is string && data.district.size() >= 1 && data.district.size() <= 120 &&
+      data.tehsil is string && data.tehsil.size() >= 1 && data.tehsil.size() <= 120 &&
+      data.isLockedToPanchayat is bool &&
+      data.version is int && data.version >= 1 && data.version <= 10000000 &&
+      data.leaningMap is map && data.leaningMap.size() <= 10000 &&
+      data.turnoutMap is map && data.turnoutMap.size() <= 10000 &&
+      data.contactMap is map && data.contactMap.size() <= 5000 &&
+      data.casteMap is map && data.casteMap.size() <= 5000 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow create: if isValidId(userId) && isOwner(userId) && isValidUserProfile(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) && isOwner(userId) && isValidUserProfile(incoming()) && incoming().uid == existing().uid && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'assignedPanchayatId', 'assignedPanchayatName', 'role', 'updatedAt'])
+      );
+      allow delete: if isValidId(userId) && isOwner(userId);
+    }
+
+    match /campaigns/{campaignId} {
+      allow get: if isValidId(campaignId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(campaignId) && isSignedIn() && isValidClientCampaign(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(campaignId) && isSignedIn() && isValidClientCampaign(incoming()) && existing().ownerId == request.auth.uid && incoming().ownerId == existing().ownerId && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && (
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'panchayatId',
+          'panchayatName',
+          'district',
+          'tehsil',
+          'isLockedToPanchayat',
+          'version',
+          'leaningMap',
+          'turnoutMap',
+          'contactMap',
+          'casteMap',
+          'updatedAt'
+        ])
+      );
+      allow delete: if isValidId(campaignId) && isSignedIn() && existing().ownerId == request.auth.uid;
+    }
+  }
+}

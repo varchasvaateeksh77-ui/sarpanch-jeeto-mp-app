@@ -1,0 +1,169 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated candidate or campaign worker profile linked to their assigned Madhya Pradesh Gram Panchayat.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID matching the document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Full name of the candidate or booth worker.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified Google account email address.",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "assignedPanchayatId": {
+          "type": "string",
+          "description": "Locked Gram Panchayat slug (e.g. sehore/sehore/mahodiya).",
+          "minLength": 3,
+          "maxLength": 120
+        },
+        "assignedPanchayatName": {
+          "type": "string",
+          "description": "Devanagari name of the assigned Gram Panchayat.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "role": {
+          "type": "string",
+          "enum": ["candidate", "worker"],
+          "description": "Campaign role."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "email",
+        "assignedPanchayatId",
+        "assignedPanchayatName",
+        "role",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ClientCampaign": {
+      "title": "ClientCampaign",
+      "description": "Per-client isolated Gram Panchayat election campaign state stored in Firestore.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the candidate who owns this campaign workspace.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "panchayatId": {
+          "type": "string",
+          "description": "Gram Panchayat slug (e.g. sehore/sehore/mahodiya).",
+          "minLength": 3,
+          "maxLength": 120
+        },
+        "panchayatName": {
+          "type": "string",
+          "description": "Gram Panchayat Hindi name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "district": {
+          "type": "string",
+          "description": "District name in Hindi.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "tehsil": {
+          "type": "string",
+          "description": "Janpad Panchayat / Tehsil name in Hindi.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "isLockedToPanchayat": {
+          "type": "boolean",
+          "description": "Whether this client workspace is locked exclusively to their contesting Gram Panchayat."
+        },
+        "version": {
+          "type": "number",
+          "description": "Monotonically increasing sync version."
+        },
+        "leaningMap": {
+          "type": "object",
+          "description": "Map of voter_id to side string ('us', 'c2', 'c3', 'undecided', 'no_vote')."
+        },
+        "turnoutMap": {
+          "type": "object",
+          "description": "Map of voter_id to boolean voted state."
+        },
+        "contactMap": {
+          "type": "object",
+          "description": "Map of family_id to Mukhiya contact phone string."
+        },
+        "casteMap": {
+          "type": "object",
+          "description": "Map of family_id to caste override string."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "ownerId",
+        "panchayatId",
+        "panchayatName",
+        "district",
+        "tehsil",
+        "isLockedToPanchayat",
+        "version",
+        "leaningMap",
+        "turnoutMap",
+        "contactMap",
+        "casteMap",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Stores isolated candidate/worker user profiles keyed by Firebase Auth UID."
+    },
+    "/campaigns/{campaignId}": {
+      "schema": {
+        "$ref": "#/entities/ClientCampaign"
+      },
+      "description": "Stores per-client isolated Gram Panchayat campaign state keyed by campaignId."
+    }
+  }
+}
