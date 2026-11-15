@@ -7,6 +7,7 @@ import {
   Radio,
   RotateCcw,
   Trash2,
+  Volume2,
   X,
 } from 'lucide-react';
 import {
@@ -37,6 +38,15 @@ import {
   filterAndSortFamilies,
 } from './utils/electionEngine';
 import { generateMpPanchayatDataset } from './utils/mpPanchayatGenerator';
+import {
+  clearAllClientPortalStorage,
+  LAST_ACTIVE_PORTAL_GP_KEY,
+  loadLocalCampaignOverlay,
+  loadPortalPanchayatFromClientStorage,
+  saveLocalCampaignOverlay,
+  savePortalPanchayatToClientStorage,
+  sanitizeEciCaptchaInput,
+} from './utils/portalStorageEngine';
 import { LandingScreen } from './components/LandingScreen';
 import { HomeDashboard } from './components/HomeDashboard';
 import { ParivarListScreen } from './components/ParivarListScreen';
@@ -282,10 +292,20 @@ export function App() {
   const [portalCaptchaLoading, setPortalCaptchaLoading] = useState(false);
   const [portalVerifySubmitting, setPortalVerifySubmitting] = useState(false);
   const [portalCaptchaError, setPortalCaptchaError] = useState('');
+  const [portalCaptchaSecondsLeft, setPortalCaptchaSecondsLeft] = useState(180);
+  const [portalStorageTier, setPortalStorageTier] = useState<
+    'indexeddb+localstorage' | 'localstorage-only' | null
+  >(null);
 
-  const getLocalPortalCacheKey = (gpId: string) =>
-    `sj_mp_official_portal_gp_v1_${gpId}`;
-  const LAST_ACTIVE_PORTAL_GP_KEY = 'sj_mp_last_active_portal_gp_v1';
+  // 180-second Official ECI CAPTCHA session countdown guard (recommended by LLM Council)
+  useEffect(() => {
+    if (!pendingPortalGp || !portalCaptcha?.captchaId) return;
+    setPortalCaptchaSecondsLeft(180);
+    const timer = window.setInterval(() => {
+      setPortalCaptchaSecondsLeft((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [pendingPortalGp, portalCaptcha?.captchaId]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -330,17 +350,18 @@ export function App() {
       // Ignore if not signed in
     }
     try {
-      window.localStorage.clear();
+      await clearAllClientPortalStorage();
     } catch {
       // Ignore storage error
     }
     setCachedPortalDataset(null);
     setOfficialPortalReceipt(null);
+    setPortalStorageTier(null);
     setPendingPortalGp(null);
     await postLiveMutation({ type: 'clear_all_test_runs' });
     setShowSettingsModal(false);
     triggerToast(
-      'सभी टेस्ट रन (Local Storage + Firestore + सर्वर) 100% साफ़ कर दिए गए!'
+      'सभी टेस्ट रन (IndexedDB + LocalStorage + Firestore + सर्वर) 100% साफ़ कर दिए गए!'
     );
   };
 
@@ -463,6 +484,94 @@ export function App() {
     setTodayActivity({ ...(data.today || {}) });
   };
 
+  // Restore any user-made Offline Campaign Overlay mutations (leaning, turnout, tags, phone numbers, castes)
+  const hydrateLocalOverlayForGp = async (gpId: string) => {
+    try {
+      const overlay = await loadLocalCampaignOverlay(gpId);
+      if (!overlay) return;
+      if (Array.isArray(overlay.leaning) && overlay.leaning.length > 0) {
+        const lMap = new Map<string, VoterLeaning>();
+        for (const l of overlay.leaning) {
+          lMap.set(l.voter_id, { ...l });
+        }
+        setLeaningMap(lMap);
+      }
+      if (Array.isArray(overlay.turnout)) {
+        setTurnoutSet(new Set(overlay.turnout));
+      }
+      if (overlay.voterTags && typeof overlay.voterTags === 'object') {
+        const vtMap = new Map<string, string[]>();
+        for (const [k, v] of Object.entries(overlay.voterTags)) {
+          if (Array.isArray(v)) vtMap.set(k, v);
+        }
+        setVoterTagsMap(vtMap);
+      }
+      if (overlay.casteOverrides && typeof overlay.casteOverrides === 'object') {
+        const cMap = new Map<string, string>();
+        for (const [k, v] of Object.entries(overlay.casteOverrides)) {
+          cMap.set(k, String(v));
+        }
+        setCasteOverrides(cMap);
+      }
+      if (
+        overlay.contactOverrides &&
+        typeof overlay.contactOverrides === 'object'
+      ) {
+        const ctMap = new Map<string, { name: string; phone: string }>();
+        for (const [k, v] of Object.entries(overlay.contactOverrides)) {
+          if (v && v.name) ctMap.set(k, v);
+        }
+        setContactOverrides(ctMap);
+      }
+      if (Array.isArray(overlay.escalatedFamilies)) {
+        setEscalatedFamilies(overlay.escalatedFamilies);
+      }
+      if (Array.isArray(overlay.candidates) && overlay.candidates.length > 0) {
+        setCandidates(overlay.candidates);
+      }
+    } catch {
+      // Ignore overlay hydration error
+    }
+  };
+
+  // Automatically persist Offline Campaign Overlay into Dual-Tier IndexedDB + LocalStorage on user edits
+  useEffect(() => {
+    if (loading || !activePanchayat?.id) return;
+    const voterTagsObj: Record<string, string[]> = {};
+    for (const [k, v] of voterTagsMap.entries()) {
+      voterTagsObj[k] = v;
+    }
+    const casteObj: Record<string, string> = {};
+    for (const [k, v] of casteOverrides.entries()) {
+      casteObj[k] = v;
+    }
+    const contactObj: Record<string, { name: string; phone: string }> = {};
+    for (const [k, v] of contactOverrides.entries()) {
+      contactObj[k] = v;
+    }
+    saveLocalCampaignOverlay({
+      gpId: activePanchayat.id,
+      updatedAt: new Date().toISOString(),
+      leaning: Array.from(leaningMap.values()),
+      turnout: Array.from(turnoutSet.values()),
+      voterTags: voterTagsObj,
+      casteOverrides: casteObj,
+      contactOverrides: contactObj,
+      escalatedFamilies,
+      candidates,
+    }).catch(() => {});
+  }, [
+    loading,
+    activePanchayat.id,
+    leaningMap,
+    turnoutSet,
+    voterTagsMap,
+    casteOverrides,
+    contactOverrides,
+    escalatedFamilies,
+    candidates,
+  ]);
+
   // Send mutation to authoritative Express server (POST /api/write)
   const postLiveMutation = async (payload: Record<string, unknown>) => {
     try {
@@ -510,7 +619,7 @@ export function App() {
           setPlansData(plansJson.plans || []);
           setLiveSamples(samplesJson || {});
 
-          // Check if the user has already verified & saved their Gram Panchayat in localStorage
+          // Check if the user has already verified & saved their Gram Panchayat in Dual-Tier Client Storage (IndexedDB + LocalStorage)
           let loadedFromLocal = false;
           try {
             const lastGpRaw = window.localStorage.getItem(
@@ -518,37 +627,36 @@ export function App() {
             );
             if (lastGpRaw) {
               const lastGp = JSON.parse(lastGpRaw);
-              const cachedRaw = window.localStorage.getItem(
-                getLocalPortalCacheKey(lastGp.id)
+              const cachedBundle = await loadPortalPanchayatFromClientStorage(
+                lastGp.id
               );
-              if (cachedRaw) {
-                const cachedBundle = JSON.parse(cachedRaw);
-                if (cachedBundle?.dataset?.roll) {
-                  const ds = cachedBundle.dataset as PhuleraDataset;
-                  const vCount = ds.roll.people.filter(
-                    (p) => p.v === 1 && p.act === 1
-                  ).length;
-                  setCachedPortalDataset(ds);
-                  setOfficialPortalReceipt(
-                    cachedBundle.officialPortalReceipt || null
-                  );
-                  setActivePanchayat({
-                    id: lastGp.id,
-                    name: lastGp.name,
-                    tehsil: lastGp.tehsil,
-                    district: lastGp.district,
-                    voters: vCount,
-                    isDemo: false,
-                    villages: lastGp.villages || [lastGp.name],
-                    boothNames: {},
-                  });
-                  hydrateCampaignStateFromDataset(ds);
-                  loadedFromLocal = true;
-                }
+              if (cachedBundle?.dataset?.roll) {
+                const ds = cachedBundle.dataset as PhuleraDataset;
+                const vCount = ds.roll.people.filter(
+                  (p) => p.v === 1 && p.act === 1
+                ).length;
+                setCachedPortalDataset(ds);
+                setOfficialPortalReceipt(
+                  cachedBundle.officialPortalReceipt || null
+                );
+                setPortalStorageTier('indexeddb+localstorage');
+                setActivePanchayat({
+                  id: lastGp.id,
+                  name: lastGp.name,
+                  tehsil: lastGp.tehsil,
+                  district: lastGp.district,
+                  voters: vCount,
+                  isDemo: false,
+                  villages: lastGp.villages || [lastGp.name],
+                  boothNames: {},
+                });
+                hydrateCampaignStateFromDataset(ds);
+                await hydrateLocalOverlayForGp(lastGp.id);
+                loadedFromLocal = true;
               }
             }
           } catch {
-            // Ignore localStorage parse error
+            // Ignore client storage parse error
           }
 
           if (!loadedFromLocal) {
@@ -1129,11 +1237,31 @@ export function App() {
     setRoute({ screen: 'home' });
   };
 
+  const handlePlayAudioCaptcha = () => {
+    if (!portalCaptcha?.captchaId) return;
+    try {
+      const audio = new Audio(
+        `/api/eci/live-voice-captcha/${encodeURIComponent(
+          portalCaptcha.captchaId
+        )}`
+      );
+      audio.play().catch(() => {
+        triggerToast('ऑडियो CAPTCHA चलाने के लिए स्पीकर अनुमति दें');
+      });
+    } catch {
+      triggerToast('ऑडियो CAPTCHA उपलब्ध नहीं है');
+    }
+  };
+
   const handlePortalCaptchaVerifySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!pendingPortalGp || !portalCaptcha) return;
-    if (portalCaptchaInput.trim().length < 4) {
-      setPortalCaptchaError('कृपया छवि में दिख रहा 6-अक्षर का CAPTCHA दर्ज करें।');
+    const captchaCheck = sanitizeEciCaptchaInput(portalCaptchaInput);
+    if (!captchaCheck.valid) {
+      setPortalCaptchaError(
+        captchaCheck.reason ||
+          'कृपया छवि में दिख रहा 6-अक्षर का CAPTCHA दर्ज करें।'
+      );
       return;
     }
 
@@ -1146,7 +1274,7 @@ export function App() {
         body: JSON.stringify({
           gp: pendingPortalGp,
           eciTarget: portalGpMatch,
-          captcha: portalCaptchaInput.trim(),
+          captcha: captchaCheck.cleaned,
           captchaId: portalCaptcha.captchaId,
         }),
       });
@@ -1169,32 +1297,24 @@ export function App() {
       const dataset = j.dataset as PhuleraDataset;
       const receipt = j.officialPortalReceipt;
 
-      // Save permanently into the user's browser localStorage so no DB or repeat CAPTCHA is needed
-      try {
-        window.localStorage.setItem(
-          getLocalPortalCacheKey(pendingPortalGp.id),
-          JSON.stringify({
-            gp: pendingPortalGp,
-            officialPortalReceipt: receipt,
-            dataset,
-            savedAt: new Date().toISOString(),
-          })
-        );
-        window.localStorage.setItem(
-          LAST_ACTIVE_PORTAL_GP_KEY,
-          JSON.stringify(pendingPortalGp)
-        );
-      } catch {
-        // Ignore quota error if storage is full
-      }
+      // Save permanently into Dual-Tier Client Storage (IndexedDB + LocalStorage Receipt Index)
+      const savedBundle = await savePortalPanchayatToClientStorage(
+        pendingPortalGp,
+        dataset,
+        receipt
+      );
+      setPortalStorageTier('indexeddb+localstorage');
 
       const gpDone = pendingPortalGp;
       setPendingPortalGp(null);
-      finalizeActivatePanchayatWithDataset(gpDone, dataset, receipt);
+      finalizeActivatePanchayatWithDataset(
+        gpDone,
+        dataset,
+        savedBundle.officialPortalReceipt
+      );
+      await hydrateLocalOverlayForGp(gpDone.id);
       triggerToast(
-        `✓ ECI CAPTCHA सत्यापित (File ID: ${String(
-          receipt?.officialFileId || ''
-        ).slice(0, 8)}...) · '${gpDone.name}' आपके Local Storage में स्थायी रूप से सेव हो गया!`
+        `✓ ECI CAPTCHA सत्यापित (Checksum: ${savedBundle.officialPortalReceipt.datasetChecksum}) · '${gpDone.name}' आपके फोन के Dual-Tier Client Storage (IndexedDB + LocalStorage) में स्थायी रूप से सेव हो गया!`
       );
     } catch {
       setPortalCaptchaError(
@@ -1205,7 +1325,7 @@ export function App() {
     }
   };
 
-  const handleActivatePanchayat = (
+  const handleActivatePanchayat = async (
     gp: {
       id: string;
       name: string;
@@ -1216,36 +1336,39 @@ export function App() {
     },
     forceCaptcha = false
   ) => {
-    // 1. Check if this Gram Panchayat is ALREADY verified and saved in the user's localStorage
+    // 1. Check if this Gram Panchayat is ALREADY verified & saved in Dual-Tier Client Storage (IndexedDB + LocalStorage)
     if (!forceCaptcha) {
       try {
-        const cachedRaw = window.localStorage.getItem(
-          getLocalPortalCacheKey(gp.id)
-        );
-        if (cachedRaw) {
-          const cachedBundle = JSON.parse(cachedRaw);
-          if (cachedBundle?.dataset?.roll) {
+        const cachedBundle = await loadPortalPanchayatFromClientStorage(gp.id);
+        if (cachedBundle?.dataset?.roll) {
+          try {
             window.localStorage.setItem(
               LAST_ACTIVE_PORTAL_GP_KEY,
               JSON.stringify(gp)
             );
-            finalizeActivatePanchayatWithDataset(
-              gp,
-              cachedBundle.dataset as PhuleraDataset,
-              cachedBundle.officialPortalReceipt || null
-            );
-            triggerToast(
-              `✓ '${gp.name}' का डेटा आपके फोन के Local Storage से तुरंत लोड हो गया (दोबारा CAPTCHA नहीं चाहिए)!`
-            );
-            return;
+          } catch {
+            // Ignore quota warning
           }
+          setPortalStorageTier('indexeddb+localstorage');
+          finalizeActivatePanchayatWithDataset(
+            gp,
+            cachedBundle.dataset as PhuleraDataset,
+            cachedBundle.officialPortalReceipt || null
+          );
+          await hydrateLocalOverlayForGp(gp.id);
+          triggerToast(
+            `✓ '${gp.name}' का डेटा आपके फोन के Client Storage (Checksum: ${
+              cachedBundle.officialPortalReceipt?.datasetChecksum || 'verified'
+            }) से तुरंत लोड हो गया — दोबारा CAPTCHA नहीं चाहिए!`
+          );
+          return;
         }
       } catch {
         // Proceed to CAPTCHA verification modal
       }
     }
 
-    // 2. Not in localStorage yet -> Open Official ECI CAPTCHA Verification Modal
+    // 2. Not in Client Storage yet -> Open Official ECI CAPTCHA Verification Modal
     setShowMereChunavSheet(false);
     openPortalCaptchaModalForGp(gp);
   };
@@ -1524,8 +1647,11 @@ export function App() {
                 >
                   {officialPortalReceipt ? (
                     <div className="truncate">
-                      ✓ ECI सत्यापित · Local Storage में सेव (बूथ #
-                      {officialPortalReceipt.partNumber}{' '}
+                      ✓ ECI सत्यापित ·{' '}
+                      {portalStorageTier === 'indexeddb+localstorage'
+                        ? 'IndexedDB + LocalStorage'
+                        : 'Client Storage'}{' '}
+                      (बूथ #{officialPortalReceipt.partNumber}{' '}
                       {officialPortalReceipt.partName} · ID:{' '}
                       {String(officialPortalReceipt.officialFileId || '').slice(
                         0,
@@ -1536,7 +1662,7 @@ export function App() {
                   ) : (
                     <div className="truncate">
                       ⚡ &apos;{activePanchayat.name}&apos; को ECI CAPTCHA से
-                      Local Storage में सेव करें
+                      Client Storage (IndexedDB) में सेव करें
                     </div>
                   )}
                   <button
@@ -2281,18 +2407,29 @@ export function App() {
               className="space-y-3"
             >
               <div className="bg-blue-50/60 rounded-2xl p-3.5 border border-blue-200 space-y-2.5">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-extrabold text-slate-800">
-                    नीचे दिख रहा आधिकारिक ECI CAPTCHA भरें:
+                    आधिकारिक ECI CAPTCHA भरें ({portalCaptchaSecondsLeft}s शेष):
                   </span>
-                  <button
-                    type="button"
-                    onClick={refreshPortalCaptchaOnly}
-                    disabled={portalCaptchaLoading}
-                    className="text-xs font-extrabold text-[#1D4ED8] hover:underline cursor-pointer"
-                  >
-                    {portalCaptchaLoading ? 'लोड हो रहा...' : 'नया CAPTCHA ↻'}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handlePlayAudioCaptcha}
+                      disabled={!portalCaptcha?.captchaId || portalCaptchaLoading}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-blue-200 text-[11px] font-extrabold text-[#1D4ED8] hover:bg-blue-50 cursor-pointer"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                      <span>सुनें</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={refreshPortalCaptchaOnly}
+                      disabled={portalCaptchaLoading}
+                      className="text-xs font-extrabold text-[#1D4ED8] hover:underline cursor-pointer"
+                    >
+                      {portalCaptchaLoading ? 'लोड हो रहा...' : 'नया CAPTCHA ↻'}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-3">
@@ -2316,11 +2453,21 @@ export function App() {
                     maxLength={6}
                     autoFocus
                     value={portalCaptchaInput}
-                    onChange={(e) => setPortalCaptchaInput(e.target.value)}
+                    onChange={(e) =>
+                      setPortalCaptchaInput(
+                        e.target.value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6)
+                      )
+                    }
                     placeholder="6 अक्षर यहाँ लिखें"
                     className="w-full px-3.5 py-3 rounded-xl border-2 border-[#1D4ED8] bg-white text-base font-extrabold tracking-widest text-slate-900 placeholder:text-xs placeholder:tracking-normal placeholder:font-semibold"
                   />
                 </div>
+
+                {portalCaptchaSecondsLeft === 0 && !portalCaptchaError && (
+                  <div className="text-xs font-extrabold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                    CAPTCHA की समय-सीमा (180s) समाप्त हो गई है। कृपया &apos;नया CAPTCHA ↻&apos; दबाएँ।
+                  </div>
+                )}
 
                 {portalCaptchaError && (
                   <div className="text-xs font-extrabold text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
@@ -2338,16 +2485,17 @@ export function App() {
                 <span>
                   {portalVerifySubmitting
                     ? 'आधिकारिक ECI पोर्टल से सत्यापित हो रहा है...'
-                    : 'CAPTCHA सत्यापित करें व Local Storage में सेव करें'}
+                    : 'CAPTCHA सत्यापित करें व Client Storage में सेव करें'}
                 </span>
               </button>
             </form>
 
             <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-[11px] text-emerald-900 font-semibold leading-relaxed">
-              💡 <strong>सिर्फ़ 1 बार CAPTCHA:</strong> जैसे ही आप यह CAPTCHA भरेंगे,
-              आधिकारिक पोर्टल (`gateway-voters.eci.gov.in`) से आपकी ग्राम पंचायत का
-              सत्यापित डेटा सीधा आपके फोन के <strong>Local Storage</strong> में सेव हो
-              जाएगा। इसके बाद न किसी डेटाबेस की ज़रूरत होगी और न दोबारा CAPTCHA भरने की!
+              💡 <strong>LLM Council Audited (IndexedDB + LocalStorage):</strong>{' '}
+              जैसे ही आप यह CAPTCHA भरेंगे, आधिकारिक पोर्टल (`gateway-voters.eci.gov.in`)
+              से आपकी ग्राम पंचायत का सत्यापित डेटा <strong>FNV-1a Checksum</strong> के साथ
+              आपके फोन के <strong>IndexedDB + LocalStorage</strong> में सेव हो जाएगा।
+              कोई 5MB Quota लिमिट नहीं और न दोबारा CAPTCHA भरने की ज़रूरत!
             </div>
           </div>
         </div>

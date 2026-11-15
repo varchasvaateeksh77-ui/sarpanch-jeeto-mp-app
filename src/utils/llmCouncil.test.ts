@@ -19,6 +19,10 @@ import {
 } from './electionEngine';
 import { matchesSearchQuery, transliterateDevanagariToRoman } from './hindiSearch';
 import { generateMpPanchayatDataset } from './mpPanchayatGenerator';
+import {
+  computeDatasetChecksum,
+  sanitizeEciCaptchaInput,
+} from './portalStorageEngine';
 
 test('karpathy/llm-council parseRankingFromText extracts numbered FINAL RANKING list accurately', () => {
   const sampleEvaluation = `Response A provides good detail on X but misses Y.
@@ -197,7 +201,29 @@ test('Vote tally conservation and 4+ rival candidate classification hold under a
   assert.equal(tally.leadMargin, tally.us - tally.them);
 });
 
-test('Full 3-Stage LLM Council Audit runs and passes all 12 automated verification checks', () => {
+test('PortalStorageEngine FNV-1a checksum and ECI CAPTCHA input sanitization work deterministically', () => {
+  const validRes = sanitizeEciCaptchaInput('  ab12XY ');
+  assert.equal(validRes.valid, true);
+  assert.equal(validRes.cleaned, 'ab12XY');
+
+  const invalidRes = sanitizeEciCaptchaInput('ab#12');
+  assert.equal(invalidRes.valid, false);
+
+  const dataset = generateMpPanchayatDataset({
+    id: 'sehore/sehore/mahodiya',
+    name: 'महौदिया',
+    tehsil: 'सीहोर जनपद',
+    district: 'सीहोर (मध्य प्रदेश)',
+    voters: 3640,
+    villages: ['महौदिया', 'सिरपड़ी', 'बड़ियाखेड़ी'],
+  });
+  const c1 = computeDatasetChecksum(dataset);
+  const c2 = computeDatasetChecksum(dataset);
+  assert.equal(c1, c2);
+  assert.equal(c1.startsWith('fnv1a-'), true);
+});
+
+test('Full 3-Stage LLM Council Audit runs and passes all 16 automated verification checks (including ECI CAPTCHA -> Dual-Tier Client Storage checks)', () => {
   const dataset = generateMpPanchayatDataset({
     id: 'sehore/sehore/mahodiya',
     name: 'महौदिया',
@@ -208,7 +234,7 @@ test('Full 3-Stage LLM Council Audit runs and passes all 12 automated verificati
   });
 
   const checks = runAutomatedVerificationChecks(dataset, 55, 9);
-  assert.equal(checks.length, 12);
+  assert.equal(checks.length, 16);
   for (const chk of checks) {
     assert.equal(chk.passed, true, `Check ${chk.id} (${chk.title}) failed: ${chk.detail}`);
   }
@@ -217,8 +243,8 @@ test('Full 3-Stage LLM Council Audit runs and passes all 12 automated verificati
   assert.equal(report.stage1.length, 4);
   assert.equal(report.stage2.length, 4);
   assert.equal(report.metadata.aggregate_rankings.length, 4);
-  assert.equal(report.metadata.passedCount, 12);
-  assert.equal(report.metadata.totalCount, 12);
+  assert.equal(report.metadata.passedCount, 16);
+  assert.equal(report.metadata.totalCount, 16);
 
   // Verify Vanshavali tree and filterAndSortFamilies
   const families = buildFamilySummaries(

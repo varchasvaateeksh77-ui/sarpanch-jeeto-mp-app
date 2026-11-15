@@ -1196,6 +1196,39 @@ async function startServer() {
     }
   });
 
+  app.get('/api/eci/live-voice-captcha/:captchaId', async (req, res) => {
+    const captchaId = String(req.params.captchaId || '').trim();
+    if (!captchaId) {
+      res.status(400).json({ ok: false, error: 'Missing captchaId' });
+      return;
+    }
+    try {
+      const vRes = await fetch(
+        `https://gateway-voters.eci.gov.in/api/v1/captcha-service/generateVoiceCaptcha/${encodeURIComponent(
+          captchaId
+        )}`,
+        { headers: ECI_HEADERS }
+      );
+      if (vRes.status !== 200) {
+        res.status(vRes.status).json({
+          ok: false,
+          error: `Voice CAPTCHA HTTP ${vRes.status}`,
+        });
+        return;
+      }
+      const contentType = vRes.headers.get('content-type') || 'audio/wav';
+      const arrayBuf = await vRes.arrayBuffer();
+      const buf = Buffer.from(arrayBuf);
+      res.setHeader('Content-Type', contentType);
+      res.send(buf);
+    } catch (err: any) {
+      res.status(502).json({
+        ok: false,
+        error: err?.message || 'Failed to fetch ECI Voice CAPTCHA',
+      });
+    }
+  });
+
   app.post('/api/eci/live-generate-eroll', async (req, res) => {
     const {
       stateCd = 'S12',
