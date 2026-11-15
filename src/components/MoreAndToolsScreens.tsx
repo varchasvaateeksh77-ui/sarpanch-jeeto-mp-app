@@ -63,6 +63,133 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
   const [electionDate, setElectionDate] = useState<string>('');
   const [showDateInput, setShowDateInput] = useState(false);
 
+  // Live ECI Gateway Console State
+  const [showEciConsole, setShowEciConsole] = useState(false);
+  const [eciSummary, setEciSummary] = useState<any>(null);
+  const [selectedDistCd, setSelectedDistCd] = useState<string>('S1234');
+  const [selectedAcNo, setSelectedAcNo] = useState<number>(152);
+  const [selectedPartNo, setSelectedPartNo] = useState<number>(1);
+  const [liveParts, setLiveParts] = useState<any[]>([]);
+  const [loadingEciParts, setLoadingEciParts] = useState(false);
+  const [captchaData, setCaptchaData] = useState<{
+    captchaId: string;
+    dataUrl: string;
+  } | null>(null);
+  const [captchaInput, setCaptchaInput] = useState('');
+  const [epicInput, setEpicInput] = useState('');
+  const [eciActionResult, setEciActionResult] = useState<string>('');
+  const [loadingCaptcha, setLoadingCaptcha] = useState(false);
+
+  const loadEciDirectorySummary = async () => {
+    try {
+      const r = await fetch('/api/eci/live-directory');
+      const j = await r.json();
+      if (j?.ok) {
+        setEciSummary(j);
+      }
+    } catch {
+      // Ignore
+    }
+  };
+
+  const fetchLiveEciPartsForAc = async (distCd: string, acNo: number) => {
+    setLoadingEciParts(true);
+    setEciActionResult('');
+    try {
+      const r = await fetch(
+        `/api/eci/live-directory?districtCd=${encodeURIComponent(
+          distCd
+        )}&acNumber=${acNo}&live=1`
+      );
+      const j = await r.json();
+      if (j?.ok && Array.isArray(j.parts)) {
+        setLiveParts(j.parts);
+        onToast(
+          `ECI गेटवे से ${j.parts.length} असली मतदान केंद्र (Polling Booths) लाइव प्राप्त हुए!`
+        );
+      }
+    } catch {
+      onToast('ECI गेटवे से संपर्क करने में त्रुटि');
+    } finally {
+      setLoadingEciParts(false);
+    }
+  };
+
+  const fetchLiveCaptcha = async () => {
+    setLoadingCaptcha(true);
+    setEciActionResult('');
+    try {
+      const r = await fetch('/api/eci/live-captcha');
+      const j = await r.json();
+      if (j?.ok && j.dataUrl) {
+        setCaptchaData({ captchaId: j.captchaId, dataUrl: j.dataUrl });
+        setCaptchaInput('');
+      } else {
+        onToast('CAPTCHA लोड नहीं हो सका');
+      }
+    } catch {
+      onToast('ECI CAPTCHA सेवा त्रुटि');
+    } finally {
+      setLoadingCaptcha(false);
+    }
+  };
+
+  const handleLiveGenerateEroll = async () => {
+    if (!captchaData || !captchaInput.trim()) {
+      onToast('कृपया पहले 6-अक्षर का CAPTCHA दर्ज करें');
+      return;
+    }
+    setEciActionResult('ECI सर्वर पर PDF जनरेट हो रहा है...');
+    try {
+      const r = await fetch('/api/eci/live-generate-eroll', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stateCd: 'S12',
+          districtCd: selectedDistCd,
+          acNumber: selectedAcNo,
+          partNumber: selectedPartNo,
+          langCd: 'HIN',
+          captcha: captchaInput.trim(),
+          captchaId: captchaData.captchaId,
+        }),
+      });
+      const j = await r.json();
+      setEciActionResult(JSON.stringify(j.eciResponse || j, null, 2));
+      if (j?.ok) {
+        onToast('ECI मतदाता सूची PDF File ID सफलतापूर्वक जनरेट हो गई!');
+      } else {
+        onToast(j?.eciResponse?.message || 'CAPTCHA अमान्य या त्रुटि');
+      }
+    } catch (e: any) {
+      setEciActionResult(e?.message || 'Error');
+    }
+  };
+
+  const handleLiveEpicSearch = async () => {
+    if (!captchaData || !captchaInput.trim() || !epicInput.trim()) {
+      onToast('कृपया EPIC नंबर और CAPTCHA दोनों दर्ज करें');
+      return;
+    }
+    setEciActionResult('ECI Elasticsearch में EPIC खोजा जा रहा है...');
+    try {
+      const r = await fetch('/api/eci/live-epic-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          epicNumber: epicInput.trim(),
+          stateCd: 'S12',
+          captcha: captchaInput.trim(),
+          captchaId: captchaData.captchaId,
+        }),
+      });
+      const j = await r.json();
+      setEciActionResult(JSON.stringify(j.results ?? j, null, 2));
+    } catch (e: any) {
+      setEciActionResult(e?.message || 'Error');
+    }
+  };
+
   const candidateSummary = useMemo(() => {
     const names = candidates
       .filter((c) => !c.is_me && c.id !== 1)
@@ -346,6 +473,234 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
               </div>
               <Smartphone className="w-4 h-4 text-[#1D4ED8]" />
             </a>
+          </div>
+        </div>
+
+        {/* Section 4: Live ECI Gateway Scraper (gateway-voters.eci.gov.in) */}
+        <div className="space-y-1.5">
+          <div className="px-1 text-xs font-extrabold text-slate-400">
+            लाइव ECI स्क्रैपर (मध्य प्रदेश S12 · 55,344 बूथ)
+          </div>
+          <div className="bg-white rounded-2xl border border-emerald-200 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => {
+                const next = !showEciConsole;
+                setShowEciConsole(next);
+                if (next && !eciSummary) {
+                  loadEciDirectorySummary();
+                  fetchLiveCaptcha();
+                }
+              }}
+              className="w-full p-4 flex items-center justify-between hover:bg-emerald-50/50 cursor-pointer text-left"
+            >
+              <div>
+                <div className="text-sm font-extrabold text-emerald-900">
+                  ECI लाइव डेटा व CAPTCHA स्क्रैपर खोलें
+                </div>
+                <div className="text-xs text-emerald-700 font-medium mt-0.5">
+                  gateway-voters.eci.gov.in · 55 जिले · 230 विधानसभा · 55,344 असली मतदान केंद्र
+                </div>
+              </div>
+              <ChevronDown
+                className={`w-4 h-4 text-emerald-700 transition-transform ${
+                  showEciConsole ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            {showEciConsole && (
+              <div className="p-3.5 border-t border-emerald-100 bg-emerald-50/30 space-y-3">
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="bg-white rounded-xl p-2 border border-emerald-100">
+                    <div className="text-base font-extrabold text-emerald-800">
+                      {eciSummary?.totalDistricts ?? 55}
+                    </div>
+                    <div className="text-[10px] font-bold text-slate-500">
+                      MP जिले (S12)
+                    </div>
+                  </div>
+                  <div className="bg-white rounded-xl p-2 border border-emerald-100">
+                    <div className="text-base font-extrabold text-emerald-800">
+                      {eciSummary?.totalAcs ?? 230}
+                    </div>
+                    <div className="text-[10px] font-bold text-slate-500">
+                      विधानसभा (AC)
+                    </div>
+                  </div>
+                  <div className="bg-white rounded-xl p-2 border border-emerald-100">
+                    <div className="text-base font-extrabold text-emerald-800">
+                      {(eciSummary?.totalPollingParts ?? 55344).toLocaleString()}
+                    </div>
+                    <div className="text-[10px] font-bold text-slate-500">
+                      असली ECI बूथ
+                    </div>
+                  </div>
+                </div>
+
+                {/* District & AC Selector */}
+                <div className="bg-white rounded-xl p-3 border border-slate-200 space-y-2">
+                  <div className="text-xs font-extrabold text-slate-700">
+                    1. बिना CAPTCHA लाइव मतदान केंद्र (Polling Parts) खींचें
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <select
+                      value={selectedDistCd}
+                      onChange={(e) => {
+                        const cd = e.target.value;
+                        setSelectedDistCd(cd);
+                        const distObj = (eciSummary?.districts || []).find(
+                          (d: any) => d.districtCd === cd
+                        );
+                        if (distObj?.acs?.[0]?.acNumber) {
+                          setSelectedAcNo(distObj.acs[0].acNumber);
+                        }
+                      }}
+                      className="text-xs font-bold border border-slate-300 rounded-lg px-2 py-1.5 bg-white"
+                    >
+                      {(eciSummary?.districts || []).map((d: any) => (
+                        <option key={d.districtCd} value={d.districtCd}>
+                          {d.districtCd} - {d.districtNameHi || d.districtName}
+                        </option>
+                      ))}
+                      {!eciSummary?.districts && (
+                        <option value="S1234">S1234 - भोपाल (BHOPAL)</option>
+                      )}
+                    </select>
+
+                    <select
+                      value={selectedAcNo}
+                      onChange={(e) => setSelectedAcNo(Number(e.target.value))}
+                      className="text-xs font-bold border border-slate-300 rounded-lg px-2 py-1.5 bg-white"
+                    >
+                      {((
+                        (eciSummary?.districts || []).find(
+                          (d: any) => d.districtCd === selectedDistCd
+                        )?.acs || []
+                      ) as any[]).map((a: any) => (
+                        <option key={a.acNumber} value={a.acNumber}>
+                          AC {a.acNumber} - {a.acNameHi || a.acName} ({a.totalParts}{' '}
+                          बूथ)
+                        </option>
+                      ))}
+                      {!eciSummary?.districts && (
+                        <option value={152}>AC 152 - बैरसिया (254 बूथ)</option>
+                      )}
+                    </select>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={loadingEciParts}
+                    onClick={() =>
+                      fetchLiveEciPartsForAc(selectedDistCd, selectedAcNo)
+                    }
+                    className="w-full py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-extrabold cursor-pointer"
+                  >
+                    {loadingEciParts
+                      ? 'ECI गेटवे से लाइव बूथ लोड हो रहे हैं...'
+                      : 'ECI गेटवे से लाइव मतदान केंद्र (get-part-list) लोड करें'}
+                  </button>
+
+                  {liveParts.length > 0 && (
+                    <div className="max-h-36 overflow-y-auto border border-slate-100 rounded-lg p-2 bg-slate-50 text-[11px] space-y-1">
+                      <div className="font-extrabold text-emerald-800">
+                        कुल {liveParts.length} असली बूथ प्राप्त (प्रथम 25):
+                      </div>
+                      {liveParts.slice(0, 25).map((p: any) => (
+                        <div
+                          key={p.partId || p.partNumber}
+                          onClick={() => setSelectedPartNo(p.partNumber)}
+                          className="flex items-center justify-between py-0.5 px-1.5 rounded hover:bg-emerald-100 cursor-pointer"
+                        >
+                          <span className="font-bold text-slate-800">
+                            भाग #{p.partNumber}: {p.partName}
+                          </span>
+                          <span className="text-[10px] text-slate-500">
+                            ID: {p.partId}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Live AES-256-GCM Decrypted CAPTCHA + E-Roll / EPIC Search */}
+                <div className="bg-white rounded-xl p-3 border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-extrabold text-slate-700">
+                      2. लाइव ECI CAPTCHA (AES-256-GCM डिक्रिप्टेड)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={fetchLiveCaptcha}
+                      className="text-[11px] font-extrabold text-[#1D4ED8] hover:underline cursor-pointer"
+                    >
+                      {loadingCaptcha ? 'लोड हो रहा...' : 'नया CAPTCHA मंगाएं ↻'}
+                    </button>
+                  </div>
+
+                  {captchaData && (
+                    <div className="flex items-center gap-2">
+                      <img
+                        src={captchaData.dataUrl}
+                        alt="Live ECI Captcha"
+                        className="h-11 rounded border border-slate-300 bg-white px-1"
+                      />
+                      <input
+                        type="text"
+                        maxLength={6}
+                        value={captchaInput}
+                        onChange={(e) => setCaptchaInput(e.target.value)}
+                        placeholder="6-अक्षर CAPTCHA"
+                        className="flex-1 text-xs font-extrabold border border-slate-300 rounded-lg px-2.5 py-2"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      value={selectedPartNo}
+                      onChange={(e) => setSelectedPartNo(Number(e.target.value))}
+                      className="w-20 text-xs font-bold border border-slate-300 rounded-lg px-2 py-1.5"
+                      placeholder="भाग सं."
+                    />
+                    <button
+                      type="button"
+                      onClick={handleLiveGenerateEroll}
+                      className="flex-1 py-2 rounded-lg bg-[#1D4ED8] hover:bg-[#1E40AF] text-white text-xs font-extrabold cursor-pointer"
+                    >
+                      भाग #{selectedPartNo} की E-Roll PDF जनरेट करें
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
+                    <input
+                      type="text"
+                      value={epicInput}
+                      onChange={(e) => setEpicInput(e.target.value)}
+                      placeholder="EPIC नंबर (जैसे ABC1234567)"
+                      className="flex-1 text-xs font-bold border border-slate-300 rounded-lg px-2.5 py-1.5"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleLiveEpicSearch}
+                      className="py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-extrabold cursor-pointer"
+                    >
+                      EPIC खोजें
+                    </button>
+                  </div>
+
+                  {eciActionResult && (
+                    <pre className="text-[10px] bg-slate-900 text-emerald-300 p-2 rounded-lg overflow-x-auto max-h-32">
+                      {eciActionResult}
+                    </pre>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
