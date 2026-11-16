@@ -29,6 +29,7 @@ export function isRunningInStandaloneAndroidApk(): boolean {
   if (typeof window === 'undefined') return false;
   if (window.AndroidEciBridge?.isNativeAndroidApp?.()) return true;
   if (window.location.protocol === 'file:') return true;
+  if (window.location.hostname === 'appassets.androidplatform.net') return true;
   if (navigator.userAgent.includes('SarpanchJeetoAndroidApp')) return true;
   return false;
 }
@@ -52,16 +53,16 @@ export async function decryptEciCaptchaClientSide(
 
   const cryptoKey = await window.crypto.subtle.importKey(
     'raw',
-    keyBytes,
+    keyBytes as unknown as BufferSource,
     { name: 'AES-GCM' },
     false,
     ['decrypt']
   );
 
   const decryptedBuf = await window.crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv, tagLength: 128 },
+    { name: 'AES-GCM', iv: iv as unknown as BufferSource, tagLength: 128 },
     cryptoKey,
-    cipherAndTag
+    cipherAndTag as unknown as BufferSource
   );
 
   const jsonStr = new TextDecoder().decode(decryptedBuf);
@@ -118,10 +119,16 @@ export async function fetchEciCaptchaDirectOrNative(): Promise<{
   captchaId: string;
   dataUrl: string;
 }> {
-  // 1. If running inside the native Android APK, use the Java HttpURLConnection bridge first (bypasses CORS)
+  // 1. If running inside the native Android APK, use the Java HttpURLConnection + AES-GCM bridge first (bypasses CORS)
   if (window.AndroidEciBridge?.fetchEciCaptchaJson) {
     const rawResp = window.AndroidEciBridge.fetchEciCaptchaJson();
     const parsed = JSON.parse(rawResp);
+    if (parsed?.id && parsed?.captcha) {
+      return {
+        captchaId: parsed.id,
+        dataUrl: `data:image/jpeg;base64,${parsed.captcha}`,
+      };
+    }
     if (parsed?.data) {
       const dec = await decryptEciCaptchaClientSide(parsed.data);
       return {
