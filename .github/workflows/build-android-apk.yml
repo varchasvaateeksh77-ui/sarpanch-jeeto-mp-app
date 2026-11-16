@@ -1,52 +1,76 @@
-name: Build Signed Installable Android APK (SarpanchJeeto-MP-v1.0.apk)
+name: Build Signed Standalone Android APK (SarpanchJeeto-MP-v1.0.apk)
 
 on:
   push:
-    branches: [main]
-    paths-ignore:
-      - 'releases/**'
-      - 'public/releases/**'
+    branches: [ main ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Compile & Sign Installable Android APK via Android SDK Build-Tools
+      - name: Install dependencies and build standalone web bundle (dist/)
+        run: |
+          npm install
+          npm run build
+          # Remove large optional walkthrough videos from APK assets copy to keep APK ~2MB and instant to install
+          rm -rf dist/assets/aistudio/*.mp4 dist/releases
+
+      - name: Compile, Package, Zipalign & Sign v1+v2+v3 Native Android APK
         run: |
           set -e
-          BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
-          PLATFORM=$(ls -d $ANDROID_HOME/platforms/android-* | sort -V | tail -n 1)
-          ANDROID_JAR="$PLATFORM/android.jar"
-          echo "Using build-tools: $BUILD_TOOLS"
-          echo "Using android.jar: $ANDROID_JAR"
+          BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
+          PLATFORM_JAR=$(ls $ANDROID_HOME/platforms/*/android.jar | sort -V | tail -n 1)
+          echo "Using BUILD_TOOLS_DIR=$BUILD_TOOLS_DIR"
+          echo "Using PLATFORM_JAR=$PLATFORM_JAR"
 
-          mkdir -p /tmp/apkbuild/src/com/sarpanchjeeto/mp /tmp/apkbuild/res/values /tmp/apkbuild/obj /tmp/apkbuild/apk
+          rm -rf /tmp/apk-build
+          mkdir -p /tmp/apk-build/src/com/sarpanchjeeto/mp
+          mkdir -p /tmp/apk-build/res/values
+          mkdir -p /tmp/apk-build/res/drawable
+          mkdir -p /tmp/apk-build/assets/www
+          mkdir -p /tmp/apk-build/obj
+          mkdir -p /tmp/apk-build/dex
 
-          cat << 'MANIFEST' > /tmp/apkbuild/AndroidManifest.xml
+          # Copy compiled standalone React app + 55 MP Districts places.json into assets/www/
+          cp -r dist/* /tmp/apk-build/assets/www/
+
+          # Create AndroidManifest.xml (Standalone Native App, minSdk 24, targetSdk 34)
+          cat << 'EOF' > /tmp/apk-build/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.sarpanchjeeto.mp"
-              android:versionCode="1"
+              android:versionCode="2"
               android:versionName="1.0.0">
+
               <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
               <application
                   android:label="सरपंच जीतो (म.प्र.)"
+                  android:icon="@drawable/ic_launcher"
                   android:usesCleartextTraffic="true"
+                  android:hardwareAccelerated="true"
                   android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
                   <activity
                       android:name="com.sarpanchjeeto.mp.MainActivity"
                       android:exported="true"
@@ -58,46 +82,180 @@ jobs:
                   </activity>
               </application>
           </manifest>
-          MANIFEST
+          EOF
 
-          cat << 'JAVA' > /tmp/apkbuild/src/com/sarpanchjeeto/mp/MainActivity.java
+          # Create Vector App Icon (@drawable/ic_launcher)
+          cat << 'EOF' > /tmp/apk-build/res/drawable/ic_launcher.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#1E3A8A"
+                  android:pathData="M0,0h108v108h-108z"/>
+              <path
+                  android:fillColor="#FBBF24"
+                  android:pathData="M54,18 A36,36 0 1,1 53.9,18 Z"/>
+              <path
+                  android:fillColor="#1E3A8A"
+                  android:pathData="M36,42 h36 v8 h-14 v24 h-8 v-24 h-14 z"/>
+          </vector>
+          EOF
+
+          # Create MainActivity.java (100% Standalone Native Android App loading file:///android_asset/www/index.html + Direct ECI Bridge)
+          cat << 'EOF' > /tmp/apk-build/src/com/sarpanchjeeto/mp/MainActivity.java
           package com.sarpanchjeeto.mp;
+
           import android.app.Activity;
+          import android.content.Intent;
+          import android.graphics.Color;
+          import android.net.Uri;
+          import android.os.Build;
           import android.os.Bundle;
+          import android.view.Window;
+          import android.view.WindowManager;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
           import android.webkit.WebSettings;
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
-          import android.content.Intent;
-          import android.net.Uri;
+
+          import java.io.BufferedReader;
+          import java.io.InputStream;
+          import java.io.InputStreamReader;
+          import java.io.OutputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.nio.charset.StandardCharsets;
 
           public class MainActivity extends Activity {
               private WebView webView;
-              private static final String APP_URL = "https://ais-pre-sj2p62ir3vqh6qrbvhzs6w-701800866090.asia-southeast1.run.app";
+
+              public class AndroidEciBridge {
+                  @JavascriptInterface
+                  public boolean isNativeAndroidApp() {
+                      return true;
+                  }
+
+                  @JavascriptInterface
+                  public String fetchEciCaptchaJson() {
+                      try {
+                          URL url = new URL("https://gateway-voters.eci.gov.in/api/v1/captcha-service/getCaptcha/EROLL");
+                          HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                          conn.setRequestMethod("GET");
+                          conn.setConnectTimeout(12000);
+                          conn.setReadTimeout(12000);
+                          conn.setRequestProperty("Accept", "application/json, text/plain, */*");
+                          conn.setRequestProperty("Origin", "https://voters.eci.gov.in");
+                          conn.setRequestProperty("Referer", "https://voters.eci.gov.in/");
+                          conn.setRequestProperty("appName", "VSP");
+                          conn.setRequestProperty("applicationName", "VSP");
+                          conn.setRequestProperty("PLATFORM-TYPE", "ECIWEB");
+                          conn.setRequestProperty("channelidobo", "VSP");
+
+                          int code = conn.getResponseCode();
+                          InputStream is = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
+                          BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+                          StringBuilder sb = new StringBuilder();
+                          String line;
+                          while ((line = br.readLine()) != null) {
+                              sb.append(line);
+                          }
+                          br.close();
+                          return sb.toString();
+                      } catch (Exception e) {
+                          return "{\"error\":\"" + e.getMessage() + "\"}";
+                      }
+                  }
+
+                  @JavascriptInterface
+                  public String verifyEciCaptchaJson(String payloadJson) {
+                      try {
+                          URL url = new URL("https://gateway-voters.eci.gov.in/api/v1/printing-publish/generate-published-eroll");
+                          HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                          conn.setRequestMethod("POST");
+                          conn.setDoOutput(true);
+                          conn.setConnectTimeout(15000);
+                          conn.setReadTimeout(15000);
+                          conn.setRequestProperty("Content-Type", "application/json");
+                          conn.setRequestProperty("Accept", "application/json, text/plain, */*");
+                          conn.setRequestProperty("Origin", "https://voters.eci.gov.in");
+                          conn.setRequestProperty("Referer", "https://voters.eci.gov.in/");
+                          conn.setRequestProperty("appName", "VSP");
+                          conn.setRequestProperty("applicationName", "VSP");
+                          conn.setRequestProperty("PLATFORM-TYPE", "ECIWEB");
+                          conn.setRequestProperty("channelidobo", "VSP");
+
+                          byte[] out = payloadJson.getBytes(StandardCharsets.UTF_8);
+                          try (OutputStream os = conn.getOutputStream()) {
+                              os.write(out);
+                          }
+
+                          int code = conn.getResponseCode();
+                          InputStream is = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
+                          BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+                          StringBuilder sb = new StringBuilder();
+                          String line;
+                          while ((line = br.readLine()) != null) {
+                              sb.append(line);
+                          }
+                          br.close();
+                          return "{\"httpStatus\":" + code + ",\"body\":" + sb.toString() + "}";
+                      } catch (Exception e) {
+                          return "{\"httpStatus\":502,\"body\":{\"status\":\"Error\",\"message\":\"" + e.getMessage() + "\"}}";
+                      }
+                  }
+              }
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
+                  requestWindowFeature(Window.FEATURE_NO_TITLE);
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                      Window window = getWindow();
+                      window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+                      window.setStatusBarColor(Color.parseColor("#1E3A8A"));
+                  }
+
                   webView = new WebView(this);
                   WebSettings settings = webView.getSettings();
                   settings.setJavaScriptEnabled(true);
                   settings.setDomStorageEnabled(true);
                   settings.setDatabaseEnabled(true);
                   settings.setAllowFileAccess(true);
-                  settings.setLoadWithOverviewMode(true);
-                  settings.setUseWideViewPort(true);
+                  settings.setAllowContentAccess(true);
+                  settings.setAllowFileAccessFromFileURLs(true);
+                  settings.setAllowUniversalAccessFromFileURLs(true);
+                  settings.setMediaPlaybackRequiresUserGesture(false);
+                  settings.setUserAgentString(settings.getUserAgentString() + " SarpanchJeetoAndroidApp/1.0");
+
+                  webView.addJavascriptInterface(new AndroidEciBridge(), "AndroidEciBridge");
+                  webView.setWebChromeClient(new WebChromeClient());
                   webView.setWebViewClient(new WebViewClient() {
                       @Override
-                      public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                          if (url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("https://wa.me")) {
-                              Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-                              startActivity(intent);
+                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                          String u = request.getUrl().toString();
+                          if (u.startsWith("file://")) {
+                              return false;
+                          }
+                          if (u.startsWith("tel:") || u.startsWith("whatsapp:") || u.startsWith("https://wa.me/")) {
+                              try {
+                                  Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(u));
+                                  startActivity(intent);
+                              } catch (Exception ignored) {}
                               return true;
                           }
+                          // Keep everything inside the app; never open external browser for app navigation
                           return false;
                       }
                   });
+
                   setContentView(webView);
-                  webView.loadUrl(APP_URL);
+                  // Load packaged standalone app from APK assets (never opens an external webpage)
+                  webView.loadUrl("file:///android_asset/www/index.html");
               }
 
               @Override
@@ -109,59 +267,63 @@ jobs:
                   }
               }
           }
-          JAVA
+          EOF
 
-          cat << 'VALUES' > /tmp/apkbuild/res/values/strings.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <string name="app_name">सरपंच जीतो (म.प्र.)</string>
-          </resources>
-          VALUES
+          # 1. Compile resources with aapt2
+          $BUILD_TOOLS_DIR/aapt2 compile --dir /tmp/apk-build/res -o /tmp/apk-build/resources.zip
+          $BUILD_TOOLS_DIR/aapt2 link \
+            -I "$PLATFORM_JAR" \
+            --manifest /tmp/apk-build/AndroidManifest.xml \
+            --java /tmp/apk-build/src \
+            -A /tmp/apk-build/assets \
+            -o /tmp/apk-build/unaligned.apk \
+            /tmp/apk-build/resources.zip
 
-          "$BUILD_TOOLS/aapt" package -f -m \
-            -J /tmp/apkbuild/src \
-            -M /tmp/apkbuild/AndroidManifest.xml \
-            -S /tmp/apkbuild/res \
-            -I "$ANDROID_JAR"
+          # 2. Compile Java -> class -> classes.dex (with d8)
+          javac -source 1.8 -target 1.8 -bootclasspath "$PLATFORM_JAR" -classpath "$PLATFORM_JAR" \
+            -d /tmp/apk-build/obj \
+            /tmp/apk-build/src/com/sarpanchjeeto/mp/R.java \
+            /tmp/apk-build/src/com/sarpanchjeeto/mp/MainActivity.java
 
-          javac -source 11 -target 11 -cp "$ANDROID_JAR" \
-            -d /tmp/apkbuild/obj \
-            /tmp/apkbuild/src/com/sarpanchjeeto/mp/*.java
+          $BUILD_TOOLS_DIR/d8 --lib "$PLATFORM_JAR" --output /tmp/apk-build/dex /tmp/apk-build/obj/com/sarpanchjeeto/mp/*.class
 
-          "$BUILD_TOOLS/d8" --lib "$ANDROID_JAR" \
-            --output /tmp/apkbuild/apk \
-            /tmp/apkbuild/obj/com/sarpanchjeeto/mp/*.class
+          # 3. Add classes.dex into unaligned.apk
+          cd /tmp/apk-build/dex
+          zip -uj /tmp/apk-build/unaligned.apk classes.dex
+          cd -
 
-          "$BUILD_TOOLS/aapt" package -f \
-            -M /tmp/apkbuild/AndroidManifest.xml \
-            -S /tmp/apkbuild/res \
-            -I "$ANDROID_JAR" \
-            -F /tmp/apkbuild/unsigned.apk \
-            /tmp/apkbuild/apk
+          # 4. Zipalign on 4-byte boundaries
+          $BUILD_TOOLS_DIR/zipalign -p -f -v 4 /tmp/apk-build/unaligned.apk /tmp/apk-build/aligned.apk
 
-          "$BUILD_TOOLS/zipalign" -f 4 /tmp/apkbuild/unsigned.apk /tmp/apkbuild/aligned.apk
-
+          # 5. Generate Release Keystore & Sign with APK Signature Scheme v1 + v2 + v3
           keytool -genkeypair -v \
-            -keystore /tmp/apkbuild/release.keystore \
+            -keystore /tmp/apk-build/release.keystore \
             -alias sarpanchjeeto \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass sarpanch123 -keypass sarpanch123 \
-            -dname "CN=Sarpanch Jeeto MP, OU=ElectionTech, O=SarpanchJeeto, L=Bhopal, S=MP, C=IN"
+            -dname "CN=Sarpanch Jeeto MP, OU=ElectionTech, O=SarpanchJeeto, L=Bhopal, ST=MP, C=IN"
 
-          mkdir -p releases public/releases
-          "$BUILD_TOOLS/apksigner" sign \
-            --ks /tmp/apkbuild/release.keystore \
+          mkdir -p public/releases
+          $BUILD_TOOLS_DIR/apksigner sign \
+            --ks /tmp/apk-build/release.keystore \
+            --ks-key-alias sarpanchjeeto \
             --ks-pass pass:sarpanch123 \
             --key-pass pass:sarpanch123 \
-            --out releases/SarpanchJeeto-MP-v1.0.apk \
-            /tmp/apkbuild/aligned.apk
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --out public/releases/SarpanchJeeto-MP-v1.0.apk \
+            /tmp/apk-build/aligned.apk
 
-          cp releases/SarpanchJeeto-MP-v1.0.apk public/releases/SarpanchJeeto-MP-v1.0.apk
-          ls -lh releases/SarpanchJeeto-MP-v1.0.apk
+          $BUILD_TOOLS_DIR/apksigner verify --verbose public/releases/SarpanchJeeto-MP-v1.0.apk
+          cp public/releases/SarpanchJeeto-MP-v1.0.apk ./SarpanchJeeto-MP-v1.0.apk
+          ls -lh public/releases/SarpanchJeeto-MP-v1.0.apk
 
-      - name: Commit Signed Installable APK to Repository
+      - name: Commit Signed Standalone APK to Repository & Create GitHub Release
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "varchasvaateeksh77@gmail.com"
-          git add releases/SarpanchJeeto-MP-v1.0.apk public/releases/SarpanchJeeto-MP-v1.0.apk
-          git diff --staged --quiet || (git commit -m "chore(apk): publish signed installable SarpanchJeeto-MP-v1.0.apk" && git push origin main)
+          git config user.name "varchasvaateeksh77-ui"
+          git config user.email "varchasvaateeksh77-ui@users.noreply.github.com"
+          git add public/releases/SarpanchJeeto-MP-v1.0.apk SarpanchJeeto-MP-v1.0.apk
+          git diff --staged --quiet || (git commit -m "chore(release): build v1+v2+v3 signed standalone Android APK with embedded assets/www [skip ci]" && git push origin HEAD:main)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

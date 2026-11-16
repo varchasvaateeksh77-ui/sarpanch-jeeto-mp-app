@@ -47,6 +47,12 @@ import {
   savePortalPanchayatToClientStorage,
   sanitizeEciCaptchaInput,
 } from './utils/portalStorageEngine';
+import {
+  fetchEciCaptchaDirectOrNative,
+  isRunningInStandaloneAndroidApk,
+  matchGpToBoothClientSide,
+  verifyEciCaptchaAndBuildDatasetDirect,
+} from './utils/eciDirectClient';
 import { LandingScreen } from './components/LandingScreen';
 import { HomeDashboard } from './components/HomeDashboard';
 import { ParivarListScreen } from './components/ParivarListScreen';
@@ -602,11 +608,16 @@ export function App() {
 
     (async () => {
       try {
+        const isStandaloneApk = isRunningInStandaloneAndroidApk();
         const [placesRes, plansRes, samplesRes, campRes] = await Promise.all([
-          fetch('/demo/places.json'),
-          fetch('/demo/plans.json'),
-          fetch('/demo/live_samples.json'),
-          fetch('/api/campaign').catch(() => null),
+          fetch('./demo/places.json').catch(() => fetch('/demo/places.json')),
+          fetch('./demo/plans.json').catch(() => fetch('/demo/plans.json')),
+          fetch('./demo/live_samples.json').catch(() =>
+            fetch('/demo/live_samples.json')
+          ),
+          isStandaloneApk
+            ? Promise.resolve(null)
+            : fetch('/api/campaign').catch(() => null),
         ]);
         const placesJson = placesRes.ok ? await placesRes.json() : { d: [] };
         const plansJson = plansRes.ok ? await plansRes.json() : { plans: [] };
@@ -1145,23 +1156,28 @@ export function App() {
     setPortalCaptchaError('');
     setPortalCaptchaLoading(true);
     try {
-      const qs = new URLSearchParams({
-        gpId: gp.id,
-        name: gp.name,
-        district: gp.district,
-      }).toString();
-      const r = await fetch(`/api/eci/gp-portal-init?${qs}`);
-      const j = await r.json();
-      if (j?.gpMatch) {
-        setPortalGpMatch(j.gpMatch);
+      if (!isRunningInStandaloneAndroidApk()) {
+        const qs = new URLSearchParams({
+          gpId: gp.id,
+          name: gp.name,
+          district: gp.district,
+        }).toString();
+        const r = await fetch(`/api/eci/gp-portal-init?${qs}`);
+        if (r.ok) {
+          const j = await r.json();
+          if (j?.gpMatch) {
+            setPortalGpMatch(j.gpMatch);
+          }
+          if (j?.captcha?.dataUrl) {
+            setPortalCaptcha(j.captcha);
+            return;
+          }
+        }
       }
-      if (j?.captcha?.dataUrl) {
-        setPortalCaptcha(j.captcha);
-      } else {
-        setPortalCaptchaError(
-          j?.error || 'ECI पोर्टल से CAPTCHA लोड नहीं हो सका। पुनः प्रयास करें।'
-        );
-      }
+      // Standalone Android App or Direct ECI Gateway mode
+      setPortalGpMatch(matchGpToBoothClientSide(gp));
+      const directCap = await fetchEciCaptchaDirectOrNative();
+      setPortalCaptcha(directCap);
     } catch {
       setPortalCaptchaError('ECI गेटवे से संपर्क करने में समस्या आई।');
     } finally {
@@ -1173,14 +1189,20 @@ export function App() {
     setPortalCaptchaLoading(true);
     setPortalCaptchaError('');
     try {
-      const r = await fetch('/api/eci/live-captcha');
-      const j = await r.json();
-      if (j?.ok && j.dataUrl) {
-        setPortalCaptcha({ captchaId: j.captchaId, dataUrl: j.dataUrl });
-        setPortalCaptchaInput('');
-      } else {
-        setPortalCaptchaError('नया CAPTCHA लोड नहीं हो सका।');
+      if (!isRunningInStandaloneAndroidApk()) {
+        const r = await fetch('/api/eci/live-captcha');
+        if (r.ok) {
+          const j = await r.json();
+          if (j?.ok && j.dataUrl) {
+            setPortalCaptcha({ captchaId: j.captchaId, dataUrl: j.dataUrl });
+            setPortalCaptchaInput('');
+            return;
+          }
+        }
       }
+      const directCap = await fetchEciCaptchaDirectOrNative();
+      setPortalCaptcha(directCap);
+      setPortalCaptchaInput('');
     } catch {
       setPortalCaptchaError('CAPTCHA रिफ्रेश करने में त्रुटि।');
     } finally {
@@ -1268,19 +1290,41 @@ export function App() {
     setPortalVerifySubmitting(true);
     setPortalCaptchaError('');
     try {
-      const r = await fetch('/api/eci/verify-and-fetch-gp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      let j: any = null;
+      let okResp = false;
+
+      if (!isRunningInStandaloneAndroidApk()) {
+        try {
+          const r = await fetch('/api/eci/verify-and-fetch-gp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              gp: pendingPortalGp,
+              eciTarget: portalGpMatch,
+              captcha: captchaCheck.cleaned,
+              captchaId: portalCaptcha.captchaId,
+            }),
+          });
+          j = await r.json();
+          okResp = r.ok && Boolean(j?.ok);
+        } catch {
+          j = null;
+        }
+      }
+
+      if (!j) {
+        // Standalone Android APK Direct ECI Gateway Verification
+        const directRes = await verifyEciCaptchaAndBuildDatasetDirect({
           gp: pendingPortalGp,
           eciTarget: portalGpMatch,
           captcha: captchaCheck.cleaned,
           captchaId: portalCaptcha.captchaId,
-        }),
-      });
-      const j = await r.json();
+        });
+        j = directRes;
+        okResp = directRes.ok;
+      }
 
-      if (!r.ok || !j?.ok) {
+      if (!okResp || !j?.ok) {
         setPortalCaptchaError(
           j?.message ||
             'ECI पोर्टल ने CAPTCHA अमान्य बताया (Invalid Captcha)। कृपया नया CAPTCHA भरें।'

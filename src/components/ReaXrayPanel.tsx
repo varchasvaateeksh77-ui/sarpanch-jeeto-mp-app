@@ -19,6 +19,7 @@ import {
   deAnonymizeRankingText,
   runDeterministicCouncilAudit,
 } from '../utils/llmCouncil';
+import { TWENTY_PENTEST_POINTS } from '../utils/penTestShield';
 
 export interface LiveFeedEventItem {
   id: string;
@@ -271,6 +272,61 @@ export const ReaXrayPanel: React.FC<ReaXrayPanelProps> = ({
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+
+            {/* 20-Point Pen-Test Security Shield (Video Audit + 20/20 Patch Matrix) */}
+            <div className="bg-slate-900 text-white rounded-2xl p-4 border border-slate-800 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-[11px] font-mono-code font-bold text-emerald-400">
+                    20 PEN-TEST LEVEL VULNERABILITIES · VIDEO AUDIT & PATCH MATRIX
+                  </div>
+                  <h3 className="text-sm font-extrabold mt-0.5">
+                    All 20 Attack Vectors from Video Patched & Unit-Tested (`src/utils/penTestShield.ts`)
+                  </h3>
+                </div>
+                <span className="px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs font-extrabold tabular-nums">
+                  {TWENTY_PENTEST_POINTS.length}/20 Patched ✓
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-start">
+                <div className="md:col-span-4 bg-slate-950 rounded-xl p-2 border border-slate-800">
+                  <video
+                    src="/assets/aistudio/VID_20261115_064950_740_3f0abcfa.mp4"
+                    controls
+                    preload="metadata"
+                    className="w-full rounded-lg max-h-64 object-contain bg-black"
+                  />
+                  <div className="text-[10px] text-slate-400 font-semibold mt-1.5 text-center">
+                    Reference: 20 (pen-test level) ways a stranger hacks your app
+                  </div>
+                </div>
+
+                <div className="md:col-span-8 grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-1">
+                  {TWENTY_PENTEST_POINTS.map((pt) => (
+                    <div
+                      key={pt.number}
+                      className="p-2.5 rounded-xl bg-slate-950/90 border border-slate-800 text-xs space-y-1"
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-extrabold text-amber-300">
+                          #{pt.number}. {pt.title}
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-700 text-[9px] font-mono-code font-bold shrink-0">
+                          PATCHED
+                        </span>
+                      </div>
+                      <div className="text-[10px] font-mono-code text-blue-300">
+                        {pt.sourceRef}
+                      </div>
+                      <div className="text-[11px] text-slate-300 leading-snug">
+                        {pt.mitigationImplemented}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
 

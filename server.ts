@@ -16,6 +16,26 @@ import {
   runAutomatedVerificationChecks,
   runDeterministicCouncilAudit,
 } from './src/utils/llmCouncil';
+import {
+  checkRapidResetAndRateLimit,
+  consumeSingleUseToken,
+  detectCachePoisoningHeaders,
+  detectGraphQlAliasOrBatchAbuse,
+  detectPrototypePollution,
+  detectRequestSmugglingHeaders,
+  detectSamlBypassAttempt,
+  detectTemplateInjection,
+  detectXxePayload,
+  normalizeCanonicalUnicode,
+  releaseInFlightStream,
+  resolveTrustedClientIp,
+  TWENTY_PENTEST_POINTS,
+  validateSafeRegexInput,
+  validateUsernameLength,
+  verifyAeadCiphertextFormat,
+  verifyJwtAlgorithmHeader,
+  verifyWebSocketAndSseOrigin,
+} from './src/utils/penTestShield';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -422,7 +442,7 @@ function pushFeedEvent(
   detail: string
 ) {
   const ev: LiveFeedEvent = {
-    id: `ev-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    id: `ev-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
     ts: new Date().toISOString(),
     actor,
     action,
@@ -454,10 +474,123 @@ function broadcastStateUpdate(triggerAction: string, event?: LiveFeedEvent) {
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: '2mb' }));
+  // #11 Spoofed IP Header Guard: Do not blindly trust client-supplied X-Forwarded-For chains
+  app.set('trust proxy', false);
+  app.disable('x-powered-by');
+  app.use(express.json({ limit: '512kb' }));
 
-  // 1. Live SSE Stream (/api/live-stream)
+  // 20-Point Pen-Test Security Shield Middleware (enforces #1, #3, #5, #8, #9, #10, #11, #16, #17, #18 on all /api/* routes)
+  app.use('/api', (req, res, next) => {
+    // #10 Cache Poisoning Guard: Block unkeyed forwarding headers + enforce no-store
+    res.setHeader(
+      'Cache-Control',
+      'no-store, no-cache, must-revalidate, private'
+    );
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Vary', 'Origin');
+
+    const smugglingCheck = detectRequestSmugglingHeaders(req.headers);
+    if (smugglingCheck.smuggled) {
+      res.status(400).json({ ok: false, error: smugglingCheck.reason });
+      return;
+    }
+
+    const cachePoisonCheck = detectCachePoisoningHeaders(req.headers);
+    if (cachePoisonCheck.poisoned) {
+      res.status(400).json({ ok: false, error: cachePoisonCheck.reason });
+      return;
+    }
+
+    const ipCheck = resolveTrustedClientIp(
+      req.socket?.remoteAddress,
+      req.headers
+    );
+    if (ipCheck.spoofAttemptDetected) {
+      res.status(400).json({ ok: false, error: ipCheck.reason });
+      return;
+    }
+
+    const rateCheck = checkRapidResetAndRateLimit(ipCheck.ip);
+    if (!rateCheck.allowed) {
+      res.status(429).json({ ok: false, error: rateCheck.reason });
+      return;
+    }
+    res.on('close', () => {
+      releaseInFlightStream(ipCheck.ip);
+    });
+
+    const jwtCheck = verifyJwtAlgorithmHeader(req.headers.authorization);
+    if (!jwtCheck.valid) {
+      res.status(401).json({ ok: false, error: jwtCheck.reason });
+      return;
+    }
+
+    const xxeCheck = detectXxePayload(req.body, req.headers['content-type']);
+    if (xxeCheck.xxe) {
+      res.status(400).json({ ok: false, error: xxeCheck.reason });
+      return;
+    }
+
+    if (
+      req.body &&
+      detectSamlBypassAttempt(
+        typeof req.body === 'string' ? req.body : JSON.stringify(req.body)
+      )
+    ) {
+      res.status(400).json({
+        ok: false,
+        error:
+          'SAML Bypass Guard (#3): SAML assertions are disabled; only Firebase OIDC RS256 is accepted.',
+      });
+      return;
+    }
+
+    const batchCheck = detectGraphQlAliasOrBatchAbuse(req.body);
+    if (batchCheck.blocked) {
+      res.status(400).json({ ok: false, error: batchCheck.reason });
+      return;
+    }
+
+    const protoCheck = detectPrototypePollution(req.body);
+    if (protoCheck.polluted) {
+      res.status(400).json({ ok: false, error: protoCheck.reason });
+      return;
+    }
+
+    const sstiCheck = detectTemplateInjection(req.body);
+    if (sstiCheck.injected) {
+      res.status(400).json({ ok: false, error: sstiCheck.reason });
+      return;
+    }
+
+    next();
+  });
+
+  // 0. 20-Point Pen-Test Security Audit Status Endpoint (/api/security/pentest-20-audit)
+  app.get('/api/security/pentest-20-audit', (_req, res) => {
+    res.json({
+      ok: true,
+      videoAsset: '/assets/aistudio/VID_20261115_064950_740_3f0abcfa.mp4',
+      totalPoints: TWENTY_PENTEST_POINTS.length,
+      patchedCount: TWENTY_PENTEST_POINTS.filter(
+        (p) => p.status === 'PATCHED_AND_VERIFIED'
+      ).length,
+      points: TWENTY_PENTEST_POINTS,
+    });
+  });
+
+  // 1. Live SSE Stream (/api/live-stream) — Protected by #19 WebSocket/SSE Origin Hijack Guard
   app.get('/api/live-stream', (req, res) => {
+    const originCheck = verifyWebSocketAndSseOrigin({
+      origin: req.headers.origin as string | undefined,
+      host: req.headers.host as string | undefined,
+      'sec-fetch-site': req.headers['sec-fetch-site'] as string | undefined,
+    });
+    if (!originCheck.allowed) {
+      res.status(403).json({ ok: false, error: originCheck.reason });
+      return;
+    }
+
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
@@ -494,11 +627,29 @@ async function startServer() {
     });
   });
 
-  // 3. Authoritative Mutation Endpoint (POST /api/write)
+  // 3. Authoritative Mutation Endpoint (POST /api/write) — Enforces #2 (52-char username) & #20 (Unicode = SPOTIFY)
   app.post('/api/write', (req, res) => {
     const body = req.body || {};
     const type: string = body.type || '';
     let campaignState = getActiveState();
+
+    // Validate username / actor / name fields against #2 (52-char username) & #20 (Unicode canonicalization)
+    for (const field of ['actor', 'name', 'voter_name']) {
+      if (body[field] !== undefined) {
+        const lenCheck = validateUsernameLength(String(body[field]));
+        if (!lenCheck.valid) {
+          res.status(400).json({ ok: false, error: lenCheck.reason });
+          return;
+        }
+        const uniCheck = normalizeCanonicalUnicode(String(body[field]));
+        if (!uniCheck.valid) {
+          res.status(400).json({ ok: false, error: uniCheck.reason });
+          return;
+        }
+        body[field] = uniCheck.canonical;
+      }
+    }
+
     const actor: string =
       body.actor ||
       campaignState.candidates.find((c) => c.is_me)?.name ||
@@ -789,8 +940,8 @@ async function startServer() {
 
       const workers = campaignState.team.filter((t) => t.role === 'worker');
       const randomWorker =
-        workers[Math.floor(Math.random() * Math.max(workers.length, 1))]
-          ?.name || 'बूथ कार्यकर्ता';
+        workers[crypto.randomInt(0, Math.max(workers.length, 1))]?.name ||
+        'बूथ कार्यकर्ता';
 
       if (targetVoter) {
         campaignState.leaning = campaignState.leaning.filter(
@@ -915,7 +1066,13 @@ async function startServer() {
     const gpId = String(
       req.query.id || store.activePanchayatId || 'sehore/sehore/mahodiya'
     );
-    const q = String(req.query.q || '').trim();
+    const rawQ = String(req.query.q || '').trim();
+    const redosCheck = validateSafeRegexInput(rawQ, 128);
+    if (!redosCheck.valid) {
+      res.status(400).json({ ok: false, error: redosCheck.reason });
+      return;
+    }
+    const q = redosCheck.sanitized;
     const gpInfo = lookupGpInPlaces(gpId);
     const bundle = buildMpGpPublicApiBundle(gpInfo);
     const peopleById = new Map(
@@ -1051,6 +1208,10 @@ async function startServer() {
   };
 
   function decryptEciPayload(b64Cipher: string): string {
+    const aeadCheck = verifyAeadCiphertextFormat(b64Cipher);
+    if (!aeadCheck.valid) {
+      throw new Error(aeadCheck.reason || 'Invalid AEAD envelope');
+    }
     const buf = Buffer.from(b64Cipher, 'base64');
     const iv = buf.subarray(0, 12);
     const tag = buf.subarray(buf.length - 16);
@@ -1439,6 +1600,19 @@ async function startServer() {
       captchaId = '',
     } = req.body || {};
 
+    // #6 2FA / CAPTCHA Replay Guard (IETF RFC 6238 §5.2): Burn single-use captchaId + captcha pair
+    const replayCheck = consumeSingleUseToken(
+      String(captchaId).trim(),
+      String(captcha).trim()
+    );
+    if (!replayCheck.allowed) {
+      res.status(409).json({
+        ok: false,
+        message: replayCheck.reason,
+      });
+      return;
+    }
+
     const gpInfo: MpGpLookupInfo = gp?.id
       ? {
           id: String(gp.id),
@@ -1557,6 +1731,29 @@ async function startServer() {
         error: err?.message || 'Failed to reach upstream server',
       });
     }
+  });
+
+  // 6. Explicit Native Android APK Binary Download Endpoint (never falls back to SPA HTML)
+  app.get('/releases/SarpanchJeeto-MP-v1.0.apk', (_req, res) => {
+    const apkPath = path.join(
+      __dirname,
+      'public',
+      'releases',
+      'SarpanchJeeto-MP-v1.0.apk'
+    );
+    if (!fs.existsSync(apkPath)) {
+      res.status(404).json({ ok: false, error: 'APK binary not found' });
+      return;
+    }
+    const stat = fs.statSync(apkPath);
+    res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="SarpanchJeeto-MP-v1.0.apk"'
+    );
+    res.setHeader('Content-Length', String(stat.size));
+    res.setHeader('Cache-Control', 'no-cache');
+    fs.createReadStream(apkPath).pipe(res);
   });
 
   if (process.env.NODE_ENV !== 'production') {
