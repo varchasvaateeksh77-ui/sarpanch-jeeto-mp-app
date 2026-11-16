@@ -28,7 +28,7 @@ jobs:
 
       - name: Install dependencies and build standalone web bundle (dist/)
         run: |
-          npm install
+          npm install --legacy-peer-deps
           npm run build
           # Remove large optional walkthrough videos from APK assets copy to keep APK ~2MB and instant to install
           rm -rf dist/assets/aistudio/*.mp4 dist/releases
