@@ -94,13 +94,22 @@ import {
   SupportChatScreen,
   VideoWalkthroughModal,
 } from './components/KaamAndChatScreens';
+import bundledPlacesJson from '../public/demo/places.json';
+import bundledPlansJson from '../public/demo/plans.json';
+import bundledLiveSamplesJson from '../public/demo/live_samples.json';
 
 export function App() {
-  const [placesData, setPlacesData] = useState<RawDistrict[]>([]);
-  const [plansData, setPlansData] = useState<PlanItem[]>([]);
-  const [liveSamples, setLiveSamples] = useState<Record<string, any>>({});
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [placesData, setPlacesData] = useState<RawDistrict[]>(
+    () => ((bundledPlacesJson as any)?.d || []) as RawDistrict[]
+  );
+  const [plansData, setPlansData] = useState<PlanItem[]>(
+    () => ((bundledPlansJson as any)?.plans || []) as PlanItem[]
+  );
+  const [liveSamples, setLiveSamples] = useState<Record<string, any>>(
+    () => (bundledLiveSamplesJson as Record<string, any>) || {}
+  );
+  const [loading, setLoading] = useState(false);
+  const [loadError] = useState<string | null>(null);
 
   const parseHashRoute = (): AppRoute | null => {
     const hash = window.location.hash.replace(/^#\/?/, '');
@@ -601,125 +610,119 @@ export function App() {
     }
   };
 
-  // Initial Data Load + LocalStorage Priority + Live SSE Subscription
+  // Initial Data Load + Dual-Tier Client Storage Priority + Live SSE Subscription (Never fails offline / in Android APK)
   useEffect(() => {
     let cancelled = false;
     let eventSource: EventSource | null = null;
+    const isStandaloneApk = isRunningInStandaloneAndroidApk();
+
+    // Immediately hydrate default Mahodiya campaign state synchronously so UI is 100% populated at 0ms
+    const defaultMahodiyaDataset = generateMpPanchayatDataset({
+      id: 'sehore/sehore/mahodiya',
+      name: 'महौदिया',
+      tehsil: 'सीहोर जनपद',
+      district: 'सीहोर (मध्य प्रदेश)',
+      voters: 3640,
+      villages: ['महौदिया', 'सिरपड़ी', 'बड़ियाखेड़ी'],
+      isDemo: false,
+    });
+    hydrateCampaignStateFromDataset(defaultMahodiyaDataset);
 
     (async () => {
       try {
-        const isStandaloneApk = isRunningInStandaloneAndroidApk();
-        const [placesRes, plansRes, samplesRes, campRes] = await Promise.all([
-          fetch('./demo/places.json').catch(() => fetch('/demo/places.json')),
-          fetch('./demo/plans.json').catch(() => fetch('/demo/plans.json')),
-          fetch('./demo/live_samples.json').catch(() =>
-            fetch('/demo/live_samples.json')
-          ),
-          isStandaloneApk
-            ? Promise.resolve(null)
-            : fetch('/api/campaign').catch(() => null),
-        ]);
-        const placesJson = placesRes.ok ? await placesRes.json() : { d: [] };
-        const plansJson = plansRes.ok ? await plansRes.json() : { plans: [] };
-        const samplesJson = samplesRes.ok ? await samplesRes.json() : {};
-        const campJson =
-          campRes && campRes.ok ? await campRes.json() : null;
-
-        if (!cancelled) {
-          setPlacesData(placesJson.d || []);
-          setPlansData(plansJson.plans || []);
-          setLiveSamples(samplesJson || {});
-
-          // Check if the user has already verified & saved their Gram Panchayat in Dual-Tier Client Storage (IndexedDB + LocalStorage)
-          let loadedFromLocal = false;
-          try {
-            const lastGpRaw = window.localStorage.getItem(
-              LAST_ACTIVE_PORTAL_GP_KEY
+        // 1. Check if the user has already verified & saved their Gram Panchayat in Dual-Tier Client Storage (IndexedDB + LocalStorage)
+        let loadedFromLocal = false;
+        try {
+          const lastGpRaw = window.localStorage.getItem(
+            LAST_ACTIVE_PORTAL_GP_KEY
+          );
+          if (lastGpRaw) {
+            const lastGp = JSON.parse(lastGpRaw);
+            const cachedBundle = await loadPortalPanchayatFromClientStorage(
+              lastGp.id
             );
-            if (lastGpRaw) {
-              const lastGp = JSON.parse(lastGpRaw);
-              const cachedBundle = await loadPortalPanchayatFromClientStorage(
-                lastGp.id
+            if (!cancelled && cachedBundle?.dataset?.roll) {
+              const ds = cachedBundle.dataset as PhuleraDataset;
+              const vCount = ds.roll.people.filter(
+                (p) => p.v === 1 && p.act === 1
+              ).length;
+              setCachedPortalDataset(ds);
+              setOfficialPortalReceipt(
+                cachedBundle.officialPortalReceipt || null
               );
-              if (cachedBundle?.dataset?.roll) {
-                const ds = cachedBundle.dataset as PhuleraDataset;
-                const vCount = ds.roll.people.filter(
-                  (p) => p.v === 1 && p.act === 1
-                ).length;
-                setCachedPortalDataset(ds);
-                setOfficialPortalReceipt(
-                  cachedBundle.officialPortalReceipt || null
-                );
-                setPortalStorageTier('indexeddb+localstorage');
-                setActivePanchayat({
-                  id: lastGp.id,
-                  name: lastGp.name,
-                  tehsil: lastGp.tehsil,
-                  district: lastGp.district,
-                  voters: vCount,
-                  isDemo: false,
-                  villages: lastGp.villages || [lastGp.name],
-                  boothNames: {},
-                });
-                hydrateCampaignStateFromDataset(ds);
-                await hydrateLocalOverlayForGp(lastGp.id);
-                loadedFromLocal = true;
-              }
+              setPortalStorageTier('indexeddb+localstorage');
+              setActivePanchayat({
+                id: lastGp.id,
+                name: lastGp.name,
+                tehsil: lastGp.tehsil,
+                district: lastGp.district,
+                voters: vCount,
+                isDemo: false,
+                villages: lastGp.villages || [lastGp.name],
+                boothNames: {},
+              });
+              hydrateCampaignStateFromDataset(ds);
+              await hydrateLocalOverlayForGp(lastGp.id);
+              loadedFromLocal = true;
             }
-          } catch {
-            // Ignore client storage parse error
           }
+        } catch {
+          // Ignore client storage parse error
+        }
 
-          if (!loadedFromLocal) {
-            if (campJson?.state) {
+        // 2. If not loaded from local storage and not in standalone offline APK, optionally sync live server state
+        if (!loadedFromLocal && !isStandaloneApk) {
+          try {
+            const campRes = await fetch('/api/campaign').catch(() => null);
+            const campJson =
+              campRes && campRes.ok ? await campRes.json() : null;
+            if (!cancelled && campJson?.state) {
               applyServerCampaignState(campJson.state);
               setLiveConnected(true);
-            } else {
-              const initialDataset = generateMpPanchayatDataset({
-                id: 'sehore/sehore/mahodiya',
-                name: 'महौदिया',
-                tehsil: 'सीहोर जनपद',
-                district: 'सीहोर (मध्य प्रदेश)',
-                voters: 3640,
-                villages: ['महौदिया', 'सिरपड़ी', 'बड़ियाखेड़ी'],
-                isDemo: false,
-              });
-              hydrateCampaignStateFromDataset(initialDataset);
             }
+          } catch {
+            // Keep bundled Mahodiya state
           }
-          setLoading(false);
         }
-      } catch (err: any) {
+
+        // Also hydrate any local overlay edits for the default active Panchayat
+        if (!loadedFromLocal && !cancelled) {
+          await hydrateLocalOverlayForGp('sehore/sehore/mahodiya');
+        }
+      } catch {
+        // Never block UI or show Failed to fetch; bundled 55-district MP data is already active
+      } finally {
         if (!cancelled) {
-          setLoadError(err?.message || 'डेटा लोड करने में त्रुटि हुई।');
           setLoading(false);
         }
       }
     })();
 
-    // Connect real-time SSE stream
-    try {
-      eventSource = new EventSource('/api/live-stream');
-      eventSource.onopen = () => {
-        if (!cancelled) setLiveConnected(true);
-      };
-      eventSource.onmessage = (e) => {
-        if (cancelled) return;
-        try {
-          const msg = JSON.parse(e.data);
-          if (msg.state) {
-            applyServerCampaignState(msg.state);
-            setLiveConnected(true);
+    // Connect real-time SSE stream only when running on web server
+    if (!isStandaloneApk) {
+      try {
+        eventSource = new EventSource('/api/live-stream');
+        eventSource.onopen = () => {
+          if (!cancelled) setLiveConnected(true);
+        };
+        eventSource.onmessage = (e) => {
+          if (cancelled) return;
+          try {
+            const msg = JSON.parse(e.data);
+            if (msg.state) {
+              applyServerCampaignState(msg.state);
+              setLiveConnected(true);
+            }
+          } catch {
+            // Ignore malformed message
           }
-        } catch {
-          // Ignore malformed message
-        }
-      };
-      eventSource.onerror = () => {
-        if (!cancelled) setLiveConnected(false);
-      };
-    } catch {
-      // SSE unsupported fallback
+        };
+        eventSource.onerror = () => {
+          if (!cancelled) setLiveConnected(false);
+        };
+      } catch {
+        // SSE unsupported fallback
+      }
     }
 
     return () => {
@@ -1157,29 +1160,34 @@ export function App() {
     setPortalCaptchaLoading(true);
     try {
       if (!isRunningInStandaloneAndroidApk()) {
-        const qs = new URLSearchParams({
-          gpId: gp.id,
-          name: gp.name,
-          district: gp.district,
-        }).toString();
-        const r = await fetch(`/api/eci/gp-portal-init?${qs}`);
-        if (r.ok) {
-          const j = await r.json();
-          if (j?.gpMatch) {
-            setPortalGpMatch(j.gpMatch);
+        try {
+          const qs = new URLSearchParams({
+            gpId: gp.id,
+            name: gp.name,
+            district: gp.district,
+          }).toString();
+          const r = await fetch(`/api/eci/gp-portal-init?${qs}`);
+          if (r.ok) {
+            const j = await r.json();
+            if (j?.gpMatch) {
+              setPortalGpMatch(j.gpMatch);
+            }
+            if (j?.captcha?.dataUrl) {
+              setPortalCaptcha(j.captcha);
+              return;
+            }
           }
-          if (j?.captcha?.dataUrl) {
-            setPortalCaptcha(j.captcha);
-            return;
-          }
+        } catch {
+          // Fall through to 3-tier ECI client
         }
       }
-      // Standalone Android App or Direct ECI Gateway mode
+      // Standalone Android App or Direct/On-Device 3-Tier ECI Gateway mode
       setPortalGpMatch(matchGpToBoothClientSide(gp));
       const directCap = await fetchEciCaptchaDirectOrNative();
       setPortalCaptcha(directCap);
     } catch {
-      setPortalCaptchaError('ECI गेटवे से संपर्क करने में समस्या आई।');
+      const fallbackCap = await fetchEciCaptchaDirectOrNative();
+      setPortalCaptcha(fallbackCap);
     } finally {
       setPortalCaptchaLoading(false);
     }
@@ -1190,21 +1198,27 @@ export function App() {
     setPortalCaptchaError('');
     try {
       if (!isRunningInStandaloneAndroidApk()) {
-        const r = await fetch('/api/eci/live-captcha');
-        if (r.ok) {
-          const j = await r.json();
-          if (j?.ok && j.dataUrl) {
-            setPortalCaptcha({ captchaId: j.captchaId, dataUrl: j.dataUrl });
-            setPortalCaptchaInput('');
-            return;
+        try {
+          const r = await fetch('/api/eci/live-captcha');
+          if (r.ok) {
+            const j = await r.json();
+            if (j?.ok && j.dataUrl) {
+              setPortalCaptcha({ captchaId: j.captchaId, dataUrl: j.dataUrl });
+              setPortalCaptchaInput('');
+              return;
+            }
           }
+        } catch {
+          // Fall through to 3-tier ECI client
         }
       }
       const directCap = await fetchEciCaptchaDirectOrNative();
       setPortalCaptcha(directCap);
       setPortalCaptchaInput('');
     } catch {
-      setPortalCaptchaError('CAPTCHA रिफ्रेश करने में त्रुटि।');
+      const fallbackCap = await fetchEciCaptchaDirectOrNative();
+      setPortalCaptcha(fallbackCap);
+      setPortalCaptchaInput('');
     } finally {
       setPortalCaptchaLoading(false);
     }
@@ -1293,7 +1307,10 @@ export function App() {
       let j: any = null;
       let okResp = false;
 
-      if (!isRunningInStandaloneAndroidApk()) {
+      if (
+        !isRunningInStandaloneAndroidApk() &&
+        !portalCaptcha.captchaId.startsWith('ECI-MP-')
+      ) {
         try {
           const r = await fetch('/api/eci/verify-and-fetch-gp', {
             method: 'POST',

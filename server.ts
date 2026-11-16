@@ -481,6 +481,15 @@ async function startServer() {
 
   // 20-Point Pen-Test Security Shield Middleware (enforces #1, #3, #5, #8, #9, #10, #11, #16, #17, #18 on all /api/* routes)
   app.use('/api', (req, res, next) => {
+    // Allow standalone Android APK (https://appassets.androidplatform.net) & web clients to call /api/eci/*
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+
     // #10 Cache Poisoning Guard: Block unkeyed forwarding headers + enforce no-store
     res.setHeader(
       'Cache-Control',

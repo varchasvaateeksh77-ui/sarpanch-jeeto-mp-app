@@ -305,16 +305,22 @@ jobs:
                               try {
                                   InputStream is = getAssets().open(assetPath);
                                   String mime = guessMimeType(assetPath);
-                                  WebResourceResponse resp = new WebResourceResponse(mime, "UTF-8", is);
                                   Map<String, String> headers = new HashMap<>();
                                   headers.put("Access-Control-Allow-Origin", "*");
                                   headers.put("Cache-Control", "no-cache");
-                                  resp.setResponseHeaders(headers);
-                                  return resp;
+                                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                      return new WebResourceResponse(mime, "UTF-8", 200, "OK", headers, is);
+                                  }
+                                  return new WebResourceResponse(mime, "UTF-8", is);
                               } catch (Exception ignored) {
                                   // SPA fallback to index.html for client routes
                                   try {
                                       InputStream indexIs = getAssets().open("www/index.html");
+                                      Map<String, String> headers = new HashMap<>();
+                                      headers.put("Access-Control-Allow-Origin", "*");
+                                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                          return new WebResourceResponse("text/html", "UTF-8", 200, "OK", headers, indexIs);
+                                      }
                                       return new WebResourceResponse("text/html", "UTF-8", indexIs);
                                   } catch (Exception ignored2) {}
                               }
@@ -356,13 +362,14 @@ jobs:
           }
           EOF
 
-          # 1. Compile resources with aapt2
+          # 1. Compile resources with aapt2 (keep json/html/js/css/svg uncompressed for direct AssetManager streaming)
           $BUILD_TOOLS_DIR/aapt2 compile --dir /tmp/apk-build/res -o /tmp/apk-build/resources.zip
           $BUILD_TOOLS_DIR/aapt2 link \
             -I "$PLATFORM_JAR" \
             --manifest /tmp/apk-build/AndroidManifest.xml \
             --java /tmp/apk-build/src \
             -A /tmp/apk-build/assets \
+            -0 json -0 html -0 js -0 css -0 svg \
             -o /tmp/apk-build/unaligned.apk \
             /tmp/apk-build/resources.zip
 
