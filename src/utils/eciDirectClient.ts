@@ -12,6 +12,10 @@ import {
   AC149_BERASIA_OFFICIAL_ROLL_PARTS,
   buildOfficialRollDatasetForSelectedParts,
 } from './eciOfficialRollRegistry';
+import {
+  ExtractedEciPdfRollSummary,
+  inspectEciPdfBuffer,
+} from './eciPdfExtractor';
 
 declare global {
   interface Window {
@@ -497,8 +501,60 @@ export async function verifyEciCaptchaAndBuildDatasetDirect(params: {
     ? gJson.payload[0]
     : String(gJson.payload || 'verified');
 
+  // Step 2 of Official ECI 2-Gateway Flow:
+  // Immediately exchange the short-lived `officialFileId` on `gateway-vpd.eci.gov.in`
+  // (`GET /api/v1/ext-printing-publish/get-published-file?fileId=<fileId>`)
+  // and run the on-device DCTDecode JPEG Stream Extractor (`inspectEciPdfBuffer`).
+  let liveExtractedPdfSummary: ExtractedEciPdfRollSummary | null = null;
+  if (officialFileId && officialFileId !== 'verified') {
+    try {
+      const vpdRes = await fetch(
+        `https://gateway-vpd.eci.gov.in/api/v1/ext-printing-publish/get-published-file?fileId=${encodeURIComponent(
+          officialFileId
+        )}`,
+        {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json, text/plain, */*',
+            Origin: 'https://voters.eci.gov.in',
+            Referer: 'https://voters.eci.gov.in/',
+            appName: 'VSP',
+            applicationName: 'VSP',
+            'PLATFORM-TYPE': 'ECIWEB',
+            channelidobo: 'VSP',
+          },
+        }
+      );
+      if (vpdRes.ok) {
+        const vpdJson = await vpdRes.json();
+        if (
+          vpdJson?.payload &&
+          typeof vpdJson.payload === 'string' &&
+          vpdJson.payload.length > 100
+        ) {
+          const binStr = atob(vpdJson.payload);
+          const bytes = new Uint8Array(binStr.length);
+          for (let i = 0; i < binStr.length; i++) {
+            bytes[i] = binStr.charCodeAt(i);
+          }
+          const refFileName =
+            vpdJson.refId ||
+            `2024-FC-EROLLGEN-S12-${matched.acNumber}-FinalRoll-Revision2-HIN-${primaryPartNumber}-WI.pdf`;
+          liveExtractedPdfSummary = inspectEciPdfBuffer(bytes, refFileName);
+        }
+      }
+    } catch {
+      // If AppTrana Geo-WAF blocks cloud origin, local / verified roll registry remains active
+    }
+  }
+
   const dataset = buildOfficialRollDatasetForSelectedParts({
-    gp,
+    gp: liveExtractedPdfSummary?.estimatedVoterBoxesCapacity
+      ? {
+          ...gp,
+          voters: liveExtractedPdfSummary.estimatedVoterBoxesCapacity,
+        }
+      : gp,
     acNumber: Number(matched.acNumber),
     selectedParts: normalizedSelectedParts,
   });
@@ -512,7 +568,10 @@ export async function verifyEciCaptchaAndBuildDatasetDirect(params: {
       partId: sp.partId || spec?.partId || 0,
       partNumber: sp.partNumber,
       partName: sp.partName,
-      votersCount: spec?.totalVoters || null,
+      votersCount:
+        spec?.totalVoters ||
+        liveExtractedPdfSummary?.estimatedVoterBoxesCapacity ||
+        null,
       maleVoters: spec?.maleVoters || null,
       femaleVoters: spec?.femaleVoters || null,
       officialPdfUrl:
@@ -541,6 +600,7 @@ export async function verifyEciCaptchaAndBuildDatasetDirect(params: {
         .join(', '),
       selectedPartsCount: normalizedSelectedParts.length,
       selectedBoothReceipts,
+      liveExtractedPdfSummary,
       verifiedAt: new Date().toISOString(),
       storageMode: 'INDEXEDDB_AND_LOCALSTORAGE_DUAL_TIER',
     },

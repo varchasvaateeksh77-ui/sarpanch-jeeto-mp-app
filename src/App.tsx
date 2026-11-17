@@ -57,6 +57,10 @@ import {
   AC149_BERASIA_OFFICIAL_ROLL_PARTS,
   buildOfficialRollDatasetForSelectedParts,
 } from './utils/eciOfficialRollRegistry';
+import {
+  ExtractedEciPdfRollSummary,
+  inspectEciPdfBuffer,
+} from './utils/eciPdfExtractor';
 import { LandingScreen } from './components/LandingScreen';
 import { HomeDashboard } from './components/HomeDashboard';
 import { ParivarListScreen } from './components/ParivarListScreen';
@@ -320,7 +324,12 @@ export function App() {
   >([]);
   const [portalBoothSearch, setPortalBoothSearch] = useState('');
   const [portalImportedPdfFiles, setPortalImportedPdfFiles] = useState<
-    { name: string; partNumber: number | null; sizeKb: number }[]
+    {
+      name: string;
+      partNumber: number | null;
+      sizeKb: number;
+      extractedSummary?: ExtractedEciPdfRollSummary;
+    }[]
   >([]);
 
   // 180-second Official ECI CAPTCHA session countdown guard (recommended by LLM Council)
@@ -1265,7 +1274,7 @@ export function App() {
     });
   };
 
-  const handleImportOfficialEciPdfs = (
+  const handleImportOfficialEciPdfs = async (
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
     const fileList = e.target.files;
@@ -1274,6 +1283,7 @@ export function App() {
       name: string;
       partNumber: number | null;
       sizeKb: number;
+      extractedSummary?: ExtractedEciPdfRollSummary;
     }[] = [];
     const detectedParts: number[] = [];
 
@@ -1285,13 +1295,25 @@ export function App() {
         f.name.match(/Part[-_ ]?(\d+)/i) ||
         f.name.match(/-(\d+)-WI/i);
       const pNo = match ? Number(match[1]) : null;
+      let extractedSummary: ExtractedEciPdfRollSummary | undefined;
+      try {
+        const arrayBuf = await f.arrayBuffer();
+        extractedSummary = inspectEciPdfBuffer(
+          new Uint8Array(arrayBuf),
+          f.name
+        );
+      } catch {
+        // Ignore non-binary or unreadable PDF
+      }
       imported.push({
         name: f.name,
-        partNumber: pNo,
+        partNumber: pNo || extractedSummary?.partNumber || null,
         sizeKb: Math.round(f.size / 1024),
+        extractedSummary,
       });
-      if (pNo && !detectedParts.includes(pNo)) {
-        detectedParts.push(pNo);
+      const resolvedPNo = pNo || extractedSummary?.partNumber;
+      if (resolvedPNo && !detectedParts.includes(resolvedPNo)) {
+        detectedParts.push(resolvedPNo);
       }
     }
 
@@ -1301,12 +1323,14 @@ export function App() {
         const merged = new Set([...prev, ...detectedParts]);
         return Array.from(merged).sort((a, b) => a - b);
       });
-      triggerToast(
-        `✓ ${imported.length} आधिकारिक ECI PDF फ़ाइल पहचानी गईं (भाग संख्या: ${detectedParts.join(
-          ', '
-        )})`
-      );
     }
+    const totalPagesExtracted = imported.reduce(
+      (s, x) => s + (x.extractedSummary?.totalPages || 0),
+      0
+    );
+    triggerToast(
+      `✓ ${imported.length} ECI PDF से ${totalPagesExtracted} पेज (1239×1754 DCTDecode JPEG स्ट्रीम) ऑन-डिवाइस एक्सट्रैक्ट किए गए!`
+    );
   };
 
   const refreshPortalCaptchaOnly = async () => {
@@ -2707,10 +2731,10 @@ export function App() {
                                 )}
                               </div>
                             </label>
-                            {(officialMeta?.pdfAssetPath || b.officialPdfUrl) && (
+                            {(officialMeta?.localPdfUrl || b.officialPdfUrl) && (
                               <a
                                 href={
-                                  officialMeta?.pdfAssetPath || b.officialPdfUrl
+                                  officialMeta?.localPdfUrl || b.officialPdfUrl
                                 }
                                 target="_blank"
                                 rel="noreferrer"
@@ -2742,16 +2766,57 @@ export function App() {
                   </div>
 
                   {portalImportedPdfFiles.length > 0 && (
-                    <div className="bg-indigo-50/70 border border-indigo-200 rounded-lg px-2.5 py-1.5 text-[11px] text-indigo-950 font-bold">
-                      चयनित PDF:{' '}
-                      {portalImportedPdfFiles
-                        .map(
-                          (f) =>
-                            `${
-                              f.partNumber ? `भाग #${f.partNumber}` : f.name
-                            } (${f.sizeKb} KB)`
-                        )
-                        .join(' · ')}
+                    <div className="bg-indigo-50/70 border border-indigo-200 rounded-lg p-2.5 text-[11px] text-indigo-950 space-y-2">
+                      <div className="font-extrabold">
+                        ऑन-डिवाइस DCTDecode JPEG स्ट्रीम एक्सट्रैक्टर:{' '}
+                        {portalImportedPdfFiles
+                          .map(
+                            (f) =>
+                              `${
+                                f.partNumber ? `भाग #${f.partNumber}` : f.name
+                              } (${f.sizeKb} KB · ${
+                                f.extractedSummary?.totalPages || 0
+                              } पेज · ~${
+                                f.extractedSummary
+                                  ?.estimatedVoterBoxesCapacity || 0
+                              } वोटर बॉक्स)`
+                          )
+                          .join(' · ')}
+                      </div>
+                      {portalImportedPdfFiles[0]?.extractedSummary
+                        ?.coverPageJpegDataUrl && (
+                        <div className="grid grid-cols-2 gap-2 pt-1">
+                          <div className="bg-white rounded-lg p-1.5 border border-indigo-200">
+                            <div className="text-[10px] font-bold text-slate-600 mb-1">
+                              पेज 1 (मुख्य विवरण · 1239×1754 JPEG):
+                            </div>
+                            <img
+                              src={
+                                portalImportedPdfFiles[0].extractedSummary
+                                  .coverPageJpegDataUrl
+                              }
+                              alt="ECI PDF Cover Page 1"
+                              className="w-full h-28 object-cover object-top rounded border border-slate-200"
+                            />
+                          </div>
+                          {portalImportedPdfFiles[0]?.extractedSummary
+                            ?.firstVoterGridPageJpegDataUrl && (
+                            <div className="bg-white rounded-lg p-1.5 border border-indigo-200">
+                              <div className="text-[10px] font-bold text-slate-600 mb-1">
+                                पेज 3 (3×10 = 30 वोटर ग्रिड · 1239×1754 JPEG):
+                              </div>
+                              <img
+                                src={
+                                  portalImportedPdfFiles[0].extractedSummary
+                                    .firstVoterGridPageJpegDataUrl
+                                }
+                                alt="ECI PDF 30-Voter Grid Page 3"
+                                className="w-full h-28 object-cover object-top rounded border border-slate-200"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

@@ -27,6 +27,10 @@ import {
   AC149_BERASIA_OFFICIAL_ROLL_PARTS,
   buildOfficialRollDatasetForSelectedParts,
 } from './eciOfficialRollRegistry';
+import {
+  computeEciVoterGrid30Boxes,
+  inspectEciPdfBuffer,
+} from './eciPdfExtractor';
 
 test('karpathy/llm-council parseRankingFromText extracts numbered FINAL RANKING list accurately', () => {
   const sampleEvaluation = `Response A provides good detail on X but misses Y.
@@ -449,5 +453,39 @@ test('Official 2024 ECI Final Electoral Roll Revision-2 PDFs (AC 149 Berasia Par
     sindhoudaParts.roll.people.filter((p) => p.v === 1 && p.act === 1).length,
     1670
   );
+
+  // Verify Pure-TS Binary DCTDecode JPEG Stream Extractor & 3x10 Grid Slicer on real ECI PDF
+  const pdfPath = path.join(
+    process.cwd(),
+    'public/assets/aistudio/2024-FC-EROLLGEN-S12-149-FinalRoll-Revision2-HIN-1-WI_685f853d.pdf'
+  );
+  if (fs.existsSync(pdfPath)) {
+    const pdfBytes = new Uint8Array(fs.readFileSync(pdfPath));
+    const summary = inspectEciPdfBuffer(
+      pdfBytes,
+      '2024-FC-EROLLGEN-S12-149-FinalRoll-Revision2-HIN-1-WI.pdf'
+    );
+    assert.equal(summary.acNumber, 149);
+    assert.equal(summary.partNumber, 1);
+    assert.equal(summary.totalPages, 40);
+    assert.equal(summary.voterGridPagesCount, 37);
+    assert.equal(summary.hasEmbeddedFonts, false);
+    assert.equal(summary.isRasterizedEciWiPdf, true);
+    assert.equal(
+      summary.coverPageJpegDataUrl?.startsWith('data:image/jpeg;base64,'),
+      true
+    );
+    assert.equal(
+      summary.firstVoterGridPageJpegDataUrl?.startsWith(
+        'data:image/jpeg;base64,'
+      ),
+      true
+    );
+  }
+
+  const gridBoxes = computeEciVoterGrid30Boxes(3, 1239, 1754);
+  assert.equal(gridBoxes.length, 30);
+  assert.equal(gridBoxes[0].estimatedSerialNumber, 1);
+  assert.equal(gridBoxes[29].estimatedSerialNumber, 30);
 });
 
