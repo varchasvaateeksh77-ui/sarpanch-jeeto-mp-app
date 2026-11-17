@@ -23,6 +23,10 @@ import {
   computeDatasetChecksum,
   sanitizeEciCaptchaInput,
 } from './portalStorageEngine';
+import {
+  AC149_BERASIA_OFFICIAL_ROLL_PARTS,
+  buildOfficialRollDatasetForSelectedParts,
+} from './eciOfficialRollRegistry';
 
 test('karpathy/llm-council parseRankingFromText extracts numbered FINAL RANKING list accurately', () => {
   const sampleEvaluation = `Response A provides good detail on X but misses Y.
@@ -352,3 +356,98 @@ test('Full 3-Stage LLM Council Audit runs and passes all 16 automated verificati
   });
   assert.equal(filteredByHouse.length > 0, true);
 });
+
+test('Official 2024 ECI Final Electoral Roll Revision-2 PDFs (AC 149 Berasia Parts 1, 2, 3, 4) match exact voter counts, real EPICs, and selective booth roll filtering', () => {
+  assert.equal(AC149_BERASIA_OFFICIAL_ROLL_PARTS[1].totalVoters, 1028);
+  assert.equal(AC149_BERASIA_OFFICIAL_ROLL_PARTS[1].maleVoters, 541);
+  assert.equal(AC149_BERASIA_OFFICIAL_ROLL_PARTS[1].femaleVoters, 487);
+
+  assert.equal(AC149_BERASIA_OFFICIAL_ROLL_PARTS[2].totalVoters, 841);
+  assert.equal(AC149_BERASIA_OFFICIAL_ROLL_PARTS[2].maleVoters, 471);
+  assert.equal(AC149_BERASIA_OFFICIAL_ROLL_PARTS[2].femaleVoters, 370);
+
+  assert.equal(AC149_BERASIA_OFFICIAL_ROLL_PARTS[3].totalVoters, 795);
+  assert.equal(AC149_BERASIA_OFFICIAL_ROLL_PARTS[3].maleVoters, 410);
+  assert.equal(AC149_BERASIA_OFFICIAL_ROLL_PARTS[3].femaleVoters, 385);
+
+  assert.equal(AC149_BERASIA_OFFICIAL_ROLL_PARTS[4].totalVoters, 875);
+  assert.equal(AC149_BERASIA_OFFICIAL_ROLL_PARTS[4].maleVoters, 465);
+  assert.equal(AC149_BERASIA_OFFICIAL_ROLL_PARTS[4].femaleVoters, 410);
+
+  // Full Sooraj Pura 4-booth cluster (Parts 1, 2, 3, 4 = 3,539 voters)
+  const fullCluster = buildOfficialRollDatasetForSelectedParts({
+    gp: {
+      id: 'bhopal/berasia/sooraj-pura',
+      name: 'सूरज पुरा',
+      tehsil: 'बैरसिया जनपद',
+      district: 'भोपाल (मध्य प्रदेश)',
+      voters: 3539,
+      villages: ['सूरज पुरा', 'बाबूखेड़ी', 'उमरिया', 'सिंधौड़ा'],
+    },
+    acNumber: 149,
+    selectedParts: [1, 2, 3, 4],
+  });
+
+  const activeVotersAll4 = fullCluster.roll.people.filter(
+    (p) => p.v === 1 && p.act === 1
+  );
+  assert.equal(activeVotersAll4.length, 3539);
+  assert.equal(
+    activeVotersAll4.filter((p) => p.g === 'm').length,
+    541 + 471 + 410 + 465
+  );
+  assert.equal(
+    activeVotersAll4.filter((p) => p.g === 'f').length,
+    487 + 370 + 385 + 410
+  );
+
+  // Verify real voters from the 4 uploaded PDFs exist with their exact EPIC IDs
+  const rakesh = activeVotersAll4.find((p) => p.e === 'TUA2741437');
+  assert.ok(rakesh, 'Rakesh Lodhi (TUA2741437) from Part 1 Sooraj Pura PDF must exist');
+  assert.equal(rakesh.n, 'राकेश लोधी');
+
+  const manisha = activeVotersAll4.find((p) => p.e === 'TUA1806355');
+  assert.ok(manisha, 'Manisha (TUA1806355) from Part 2 Umariya PDF must exist');
+  assert.equal(manisha.n, 'मनीषा');
+
+  const ganpat = activeVotersAll4.find((p) => p.e === 'HDY4755401');
+  assert.ok(ganpat, 'Ganpat Lal (HDY4755401) from Part 3 Sindhouda Booth 1 PDF must exist');
+  assert.equal(ganpat.n, 'गनपत लाल');
+
+  const mohan = activeVotersAll4.find((p) => p.e === 'TUA2490076');
+  assert.ok(mohan, 'Mohan Singh (TUA2490076) from Part 4 Sindhouda Booth 2 PDF must exist');
+  assert.equal(mohan.n, 'मोहन सिंह');
+
+  // Verify selective single-roll download wrapper (e.g. only Part 1 = 1,028 voters)
+  const part1Only = buildOfficialRollDatasetForSelectedParts({
+    gp: {
+      id: 'bhopal/berasia/sooraj-pura',
+      name: 'सूरज पुरा',
+      tehsil: 'बैरसिया जनपद',
+      district: 'भोपाल (मध्य प्रदेश)',
+    },
+    acNumber: 149,
+    selectedParts: [{ partNumber: 1, partName: 'सूरज पुरा' }],
+  });
+  assert.equal(
+    part1Only.roll.people.filter((p) => p.v === 1 && p.act === 1).length,
+    1028
+  );
+
+  // Verify Sindhouda 2-roll selection (Parts 3 & 4 = 795 + 875 = 1,670 voters)
+  const sindhoudaParts = buildOfficialRollDatasetForSelectedParts({
+    gp: {
+      id: 'bhopal/berasia/sindhouda',
+      name: 'सिंधौड़ा',
+      tehsil: 'बैरसिया जनपद',
+      district: 'भोपाल (मध्य प्रदेश)',
+    },
+    acNumber: 149,
+    selectedParts: [3, 4],
+  });
+  assert.equal(
+    sindhoudaParts.roll.people.filter((p) => p.v === 1 && p.act === 1).length,
+    1670
+  );
+});
+

@@ -53,6 +53,10 @@ import {
   matchGpToBoothClientSide,
   verifyEciCaptchaAndBuildDatasetDirect,
 } from './utils/eciDirectClient';
+import {
+  AC149_BERASIA_OFFICIAL_ROLL_PARTS,
+  buildOfficialRollDatasetForSelectedParts,
+} from './utils/eciOfficialRollRegistry';
 import { LandingScreen } from './components/LandingScreen';
 import { HomeDashboard } from './components/HomeDashboard';
 import { ParivarListScreen } from './components/ParivarListScreen';
@@ -311,6 +315,13 @@ export function App() {
   const [portalStorageTier, setPortalStorageTier] = useState<
     'indexeddb+localstorage' | 'localstorage-only' | null
   >(null);
+  const [portalSelectedPartNumbers, setPortalSelectedPartNumbers] = useState<
+    number[]
+  >([]);
+  const [portalBoothSearch, setPortalBoothSearch] = useState('');
+  const [portalImportedPdfFiles, setPortalImportedPdfFiles] = useState<
+    { name: string; partNumber: number | null; sizeKb: number }[]
+  >([]);
 
   // 180-second Official ECI CAPTCHA session countdown guard (recommended by LLM Council)
   useEffect(() => {
@@ -733,20 +744,22 @@ export function App() {
     };
   }, []);
 
-  // Effective Panchayat Dataset: prioritizes official ECI CAPTCHA-verified dataset stored in client localStorage
+  // Effective Panchayat Dataset: prioritizes official ECI CAPTCHA-verified dataset stored in client localStorage,
+  // or builds from Official 2024 Revision-2 ECI Roll Registry (e.g., AC-149 Berasia Parts 1-4)
   const effectivePhuleraData: PhuleraDataset = useMemo(() => {
     const baseDataset =
       cachedPortalDataset &&
       cachedPortalDataset.roll?.name === activePanchayat.name
         ? cachedPortalDataset
-        : generateMpPanchayatDataset({
-            id: activePanchayat.id,
-            name: activePanchayat.name,
-            tehsil: activePanchayat.tehsil,
-            district: activePanchayat.district,
-            voters: activePanchayat.voters,
-            villages: activePanchayat.villages,
-            isDemo: false,
+        : buildOfficialRollDatasetForSelectedParts({
+            gp: {
+              id: activePanchayat.id,
+              name: activePanchayat.name,
+              tehsil: activePanchayat.tehsil,
+              district: activePanchayat.district,
+              voters: activePanchayat.voters,
+              villages: activePanchayat.villages,
+            },
           });
     return {
       ...baseDataset,
@@ -1157,6 +1170,8 @@ export function App() {
     setPendingPortalGp(gp);
     setPortalCaptchaInput('');
     setPortalCaptchaError('');
+    setPortalBoothSearch('');
+    setPortalImportedPdfFiles([]);
     setPortalCaptchaLoading(true);
     try {
       if (!isRunningInStandaloneAndroidApk()) {
@@ -1171,6 +1186,12 @@ export function App() {
             const j = await r.json();
             if (j?.gpMatch) {
               setPortalGpMatch(j.gpMatch);
+              const defParts =
+                Array.isArray(j.gpMatch.defaultSelectedPartNumbers) &&
+                j.gpMatch.defaultSelectedPartNumbers.length > 0
+                  ? j.gpMatch.defaultSelectedPartNumbers
+                  : [Number(j.gpMatch.partNumber) || 1];
+              setPortalSelectedPartNumbers(defParts);
             }
             if (j?.captcha?.dataUrl) {
               setPortalCaptcha(j.captcha);
@@ -1182,7 +1203,13 @@ export function App() {
         }
       }
       // Standalone Android App or Direct/On-Device 3-Tier ECI Gateway mode
-      setPortalGpMatch(matchGpToBoothClientSide(gp));
+      const clientMatch = matchGpToBoothClientSide(gp);
+      setPortalGpMatch(clientMatch);
+      setPortalSelectedPartNumbers(
+        clientMatch.defaultSelectedPartNumbers?.length
+          ? clientMatch.defaultSelectedPartNumbers
+          : [clientMatch.partNumber]
+      );
       const directCap = await fetchEciCaptchaDirectOrNative();
       setPortalCaptcha(directCap);
     } catch {
@@ -1190,6 +1217,95 @@ export function App() {
       setPortalCaptcha(fallbackCap);
     } finally {
       setPortalCaptchaLoading(false);
+    }
+  };
+
+  const handlePortalSwitchAc = async (nextAcNumber: number) => {
+    if (!portalGpMatch) return;
+    try {
+      const r = await fetch(
+        `/api/eci/ac-booths?districtCd=${encodeURIComponent(
+          portalGpMatch.districtCd
+        )}&acNumber=${nextAcNumber}`
+      );
+      if (r.ok) {
+        const j = await r.json();
+        if (j?.ok && Array.isArray(j.candidateBooths)) {
+          const firstBooth = j.candidateBooths[0] || {
+            partId: Number(`${nextAcNumber}0001`),
+            partNumber: 1,
+            partName: 'बूथ 1',
+          };
+          setPortalGpMatch({
+            ...portalGpMatch,
+            acNumber: j.acNumber,
+            acNameHi: j.acNameHi,
+            acNameEn: j.acNameEn,
+            partId: firstBooth.partId,
+            partNumber: firstBooth.partNumber,
+            partName: firstBooth.partName,
+            candidateBooths: j.candidateBooths,
+          });
+          setPortalSelectedPartNumbers([firstBooth.partNumber]);
+          return;
+        }
+      }
+    } catch {
+      // Fallback for offline mode
+    }
+  };
+
+  const handleTogglePortalPartSelection = (partNumber: number) => {
+    setPortalSelectedPartNumbers((prev) => {
+      if (prev.includes(partNumber)) {
+        if (prev.length <= 1) return prev; // Keep at least 1 roll selected
+        return prev.filter((p) => p !== partNumber);
+      }
+      return [...prev, partNumber].sort((a, b) => a - b);
+    });
+  };
+
+  const handleImportOfficialEciPdfs = (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+    const imported: {
+      name: string;
+      partNumber: number | null;
+      sizeKb: number;
+    }[] = [];
+    const detectedParts: number[] = [];
+
+    for (let i = 0; i < fileList.length; i++) {
+      const f = fileList[i];
+      // Match ECI standard pattern e.g. 2024-FC-EROLLGEN-S12-149-FinalRoll-Revision2-HIN-1-WI.pdf
+      const match =
+        f.name.match(/-HIN-(\d+)-WI/i) ||
+        f.name.match(/Part[-_ ]?(\d+)/i) ||
+        f.name.match(/-(\d+)-WI/i);
+      const pNo = match ? Number(match[1]) : null;
+      imported.push({
+        name: f.name,
+        partNumber: pNo,
+        sizeKb: Math.round(f.size / 1024),
+      });
+      if (pNo && !detectedParts.includes(pNo)) {
+        detectedParts.push(pNo);
+      }
+    }
+
+    setPortalImportedPdfFiles(imported);
+    if (detectedParts.length > 0) {
+      setPortalSelectedPartNumbers((prev) => {
+        const merged = new Set([...prev, ...detectedParts]);
+        return Array.from(merged).sort((a, b) => a - b);
+      });
+      triggerToast(
+        `✓ ${imported.length} आधिकारिक ECI PDF फ़ाइल पहचानी गईं (भाग संख्या: ${detectedParts.join(
+          ', '
+        )})`
+      );
     }
   };
 
@@ -1301,6 +1417,37 @@ export function App() {
       return;
     }
 
+    const activePartNums =
+      portalSelectedPartNumbers.length > 0
+        ? portalSelectedPartNumbers
+        : [Number(portalGpMatch?.partNumber) || 1];
+
+    const selectedBoothObjects = activePartNums.map((pNo) => {
+      const found = (portalGpMatch?.candidateBooths || []).find(
+        (b: any) => Number(b.partNumber) === Number(pNo)
+      );
+      return (
+        found || {
+          partId: Number(`${portalGpMatch?.acNumber || 149}00${pNo}`),
+          partNumber: pNo,
+          partName: `${pendingPortalGp.name} बूथ ${pNo}`,
+        }
+      );
+    });
+
+    const primaryBooth = selectedBoothObjects[0] || {
+      partId: portalGpMatch?.partId || 1490001,
+      partNumber: portalGpMatch?.partNumber || 1,
+      partName: portalGpMatch?.partName || pendingPortalGp.name,
+    };
+
+    const effectiveEciTarget = {
+      ...portalGpMatch,
+      partId: primaryBooth.partId,
+      partNumber: primaryBooth.partNumber,
+      partName: primaryBooth.partName,
+    };
+
     setPortalVerifySubmitting(true);
     setPortalCaptchaError('');
     try {
@@ -1317,7 +1464,8 @@ export function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               gp: pendingPortalGp,
-              eciTarget: portalGpMatch,
+              eciTarget: effectiveEciTarget,
+              selectedParts: selectedBoothObjects,
               captcha: captchaCheck.cleaned,
               captchaId: portalCaptcha.captchaId,
             }),
@@ -1333,7 +1481,8 @@ export function App() {
         // Standalone Android APK Direct ECI Gateway Verification
         const directRes = await verifyEciCaptchaAndBuildDatasetDirect({
           gp: pendingPortalGp,
-          eciTarget: portalGpMatch,
+          eciTarget: effectiveEciTarget,
+          selectedParts: selectedBoothObjects,
           captcha: captchaCheck.cleaned,
           captchaId: portalCaptcha.captchaId,
         });
@@ -1375,7 +1524,9 @@ export function App() {
       );
       await hydrateLocalOverlayForGp(gpDone.id);
       triggerToast(
-        `✓ ECI CAPTCHA सत्यापित (Checksum: ${savedBundle.officialPortalReceipt.datasetChecksum}) · '${gpDone.name}' आपके फोन के Dual-Tier Client Storage (IndexedDB + LocalStorage) में स्थायी रूप से सेव हो गया!`
+        `✓ ECI CAPTCHA सत्यापित (${selectedBoothObjects.length} बूथ भाग: ${activePartNums.join(
+          ', '
+        )} · Checksum: ${savedBundle.officialPortalReceipt.datasetChecksum}) · '${gpDone.name}' आपके फोन के Client Storage में सेव हो गया!`
       );
     } catch {
       setPortalCaptchaError(
@@ -1476,6 +1627,15 @@ export function App() {
   }
 
   const quickSwitchPanchayats = [
+    {
+      id: 'bhopal/berasia/sooraj-pura',
+      name: 'सूरज पुरा',
+      label: 'सूरज पुरा (बैरसिया · 3,539 · 4 ECI बूथ)',
+      tehsil: 'बैरसिया जनपद',
+      district: 'भोपाल (मध्य प्रदेश)',
+      voters: 3539,
+      villages: ['सूरज पुरा', 'बाबूखेड़ी', 'उमरिया', 'सिंधौड़ा'],
+    },
     {
       id: 'sehore/sehore/mahodiya',
       name: 'महौदिया',
@@ -2382,22 +2542,22 @@ export function App() {
         </div>
       )}
 
-      {/* Post-Selection Official ECI Portal CAPTCHA Verification -> Saves to LocalStorage */}
+      {/* Post-Selection Official ECI Portal Roll Selector Wrapper + CAPTCHA Verification -> Saves to LocalStorage */}
       {pendingPortalGp && (
         <div
-          className="fixed inset-0 z-50 bg-slate-900/75 flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-slate-900/75 flex items-center justify-center p-3 overflow-y-auto"
           role="dialog"
           aria-modal="true"
-          aria-label="आधिकारिक ECI मतदाता सूची CAPTCHA सत्यापन"
+          aria-label="आधिकारिक ECI मतदाता सूची रोल सेलेक्टर और CAPTCHA सत्यापन"
         >
-          <div className="bg-white rounded-3xl max-w-md w-full p-5 space-y-4 border-2 border-[#1D4ED8]">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-4 sm:p-5 space-y-3.5 border-2 border-[#1D4ED8] my-auto max-h-[94vh] overflow-y-auto">
             <div className="flex items-start justify-between gap-2">
               <div>
                 <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-blue-50 text-[#1D4ED8] text-[10px] font-extrabold border border-blue-200 mb-1">
-                  <span>आधिकारिक ECI गेटवे · 1-बार सत्यापन</span>
+                  <span>ECI लॉगिन-मुक्त रोल सेलेक्टर रैपर · 1-बार सत्यापन</span>
                 </div>
                 <h3 className="text-lg font-extrabold text-slate-900">
-                  ग्राम पंचायत &apos;{pendingPortalGp.name}&apos; का डेटा लाएं
+                  ग्राम पंचायत &apos;{pendingPortalGp.name}&apos; — बूथ रोल चुनें
                 </h3>
                 <p className="text-xs text-slate-500 font-semibold">
                   {pendingPortalGp.tehsil} · {pendingPortalGp.district}
@@ -2414,50 +2574,185 @@ export function App() {
             </div>
 
             {portalGpMatch && (
-              <div className="bg-slate-50 rounded-2xl p-3 border border-slate-200 space-y-2 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-slate-500">
-                    ECI विधानसभा (AC):
-                  </span>
-                  <span className="font-extrabold text-slate-900">
-                    #{portalGpMatch.acNumber} - {portalGpMatch.acNameHi} (
-                    {portalGpMatch.districtCd})
-                  </span>
-                </div>
+              <div className="bg-slate-50 rounded-2xl p-3 border border-slate-200 space-y-2.5 text-xs">
+                {/* Assembly Constituency (AC) Selector */}
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-bold text-slate-500 shrink-0">
-                    मतदान केंद्र (Booth):
+                  <span className="font-bold text-slate-600 shrink-0">
+                    विधानसभा (AC):
                   </span>
-                  {Array.isArray(portalGpMatch.candidateBooths) &&
-                  portalGpMatch.candidateBooths.length > 0 ? (
+                  {Array.isArray(portalGpMatch.allDistrictAcs) &&
+                  portalGpMatch.allDistrictAcs.length > 1 ? (
                     <select
-                      value={portalGpMatch.partNumber}
-                      onChange={(e) => {
-                        const pNo = Number(e.target.value);
-                        const found = portalGpMatch.candidateBooths.find(
-                          (b: any) => b.partNumber === pNo
-                        );
-                        if (found) {
-                          setPortalGpMatch({
-                            ...portalGpMatch,
-                            partId: found.partId,
-                            partNumber: found.partNumber,
-                            partName: found.partName,
-                          });
-                        }
-                      }}
-                      className="text-xs font-extrabold text-emerald-900 bg-white border border-slate-300 rounded-lg px-2 py-1 max-w-[220px] truncate"
+                      aria-label="विधानसभा क्षेत्र चुनें"
+                      value={portalGpMatch.acNumber}
+                      onChange={(e) =>
+                        handlePortalSwitchAc(Number(e.target.value))
+                      }
+                      className="text-xs font-extrabold text-slate-900 bg-white border border-slate-300 rounded-lg px-2 py-1 max-w-[250px] truncate"
                     >
-                      {portalGpMatch.candidateBooths.map((b: any) => (
-                        <option key={b.partId || b.partNumber} value={b.partNumber}>
-                          भाग #{b.partNumber}: {b.partName} (ID #{b.partId})
+                      {portalGpMatch.allDistrictAcs.map((ac: any) => (
+                        <option key={ac.acNumber} value={ac.acNumber}>
+                          #{ac.acNumber} - {ac.acNameHi} ({ac.boothCount} बूथ)
                         </option>
                       ))}
                     </select>
                   ) : (
-                    <span className="font-extrabold text-emerald-800">
-                      भाग #{portalGpMatch.partNumber}: {portalGpMatch.partName}
+                    <span className="font-extrabold text-slate-900">
+                      #{portalGpMatch.acNumber} - {portalGpMatch.acNameHi} (
+                      {portalGpMatch.districtCd})
                     </span>
+                  )}
+                </div>
+
+                {/* Multi-Booth Roll Selector Wrapper Header */}
+                <div className="space-y-1.5 pt-1 border-t border-slate-200">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-extrabold text-slate-800">
+                      मतदान केंद्र / भाग संख्या चुनें ({portalSelectedPartNumbers.length}{' '}
+                      चयनित):
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {Number(portalGpMatch.acNumber) === 149 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPortalSelectedPartNumbers([1, 2, 3, 4])
+                          }
+                          className="px-2 py-0.5 rounded bg-emerald-100 hover:bg-emerald-200 text-emerald-900 text-[10px] font-extrabold cursor-pointer"
+                        >
+                          भाग 1–4 (सूरज पुरा क्लस्टर) चुनें
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const firstP =
+                            portalGpMatch.candidateBooths?.[0]?.partNumber || 1;
+                          setPortalSelectedPartNumbers([firstP]);
+                        }}
+                        className="px-2 py-0.5 rounded bg-slate-200 hover:bg-slate-300 text-slate-700 text-[10px] font-bold cursor-pointer"
+                      >
+                        सिर्फ़ 1 बूथ
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Search Input across AC Booths */}
+                  <input
+                    type="text"
+                    value={portalBoothSearch}
+                    onChange={(e) => setPortalBoothSearch(e.target.value)}
+                    placeholder={`AC #${portalGpMatch.acNumber} के सभी ${
+                      portalGpMatch.candidateBooths?.length || ''
+                    } बूथों में भाग संख्या या गाँव खोजें...`}
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-800"
+                  />
+
+                  {/* Scrollable Multi-Select Booth Roll List */}
+                  <div className="max-h-40 overflow-y-auto rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
+                    {(portalGpMatch.candidateBooths || [])
+                      .filter((b: any) => {
+                        if (!portalBoothSearch.trim()) return true;
+                        const q = portalBoothSearch.trim().toLowerCase();
+                        return (
+                          String(b.partNumber).includes(q) ||
+                          String(b.partName || '')
+                            .toLowerCase()
+                            .includes(q)
+                        );
+                      })
+                      .slice(0, 60)
+                      .map((b: any) => {
+                        const isChecked = portalSelectedPartNumbers.includes(
+                          Number(b.partNumber)
+                        );
+                        const officialMeta =
+                          Number(portalGpMatch.acNumber) === 149
+                            ? AC149_BERASIA_OFFICIAL_ROLL_PARTS[
+                                Number(b.partNumber)
+                              ]
+                            : undefined;
+                        return (
+                          <div
+                            key={b.partId || b.partNumber}
+                            className={`flex items-center justify-between gap-2 px-2.5 py-1.5 text-xs ${
+                              isChecked ? 'bg-emerald-50/80' : 'hover:bg-slate-50'
+                            }`}
+                          >
+                            <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() =>
+                                  handleTogglePortalPartSelection(
+                                    Number(b.partNumber)
+                                  )
+                                }
+                                className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                              />
+                              <div className="truncate">
+                                <span className="font-extrabold text-slate-900">
+                                  भाग #{b.partNumber}: {b.partName}
+                                </span>
+                                {officialMeta ? (
+                                  <span className="ml-1.5 inline-flex items-center px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-900 text-[10px] font-extrabold">
+                                    ✓ {officialMeta.totalVoters} वोटर (
+                                    {officialMeta.maleVoters} पु. /{' '}
+                                    {officialMeta.femaleVoters} म.)
+                                  </span>
+                                ) : (
+                                  <span className="ml-1 text-[10px] text-slate-400">
+                                    (ID #{b.partId})
+                                  </span>
+                                )}
+                              </div>
+                            </label>
+                            {(officialMeta?.pdfAssetPath || b.officialPdfUrl) && (
+                              <a
+                                href={
+                                  officialMeta?.pdfAssetPath || b.officialPdfUrl
+                                }
+                                target="_blank"
+                                rel="noreferrer"
+                                className="shrink-0 px-2 py-0.5 rounded bg-blue-50 hover:bg-blue-100 text-[#1D4ED8] border border-blue-200 text-[10px] font-extrabold"
+                              >
+                                असली PDF ↗
+                              </a>
+                            )}
+                          </div>
+                        );
+                      })}
+                  </div>
+
+                  {/* Direct Local Official ECI PDF Roll Importer */}
+                  <div className="flex items-center justify-between gap-2 pt-1">
+                    <label className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 text-[11px] font-extrabold cursor-pointer">
+                      <span>📄 डाउनलोड की गई ECI PDF फ़ाइलें जोड़ें (Optional)</span>
+                      <input
+                        type="file"
+                        accept=".pdf"
+                        multiple
+                        onChange={handleImportOfficialEciPdfs}
+                        className="hidden"
+                      />
+                    </label>
+                    <span className="text-[10px] font-bold text-emerald-800">
+                      बिना ECI लॉगिन · सिंगल-पार्ट फेच
+                    </span>
+                  </div>
+
+                  {portalImportedPdfFiles.length > 0 && (
+                    <div className="bg-indigo-50/70 border border-indigo-200 rounded-lg px-2.5 py-1.5 text-[11px] text-indigo-950 font-bold">
+                      चयनित PDF:{' '}
+                      {portalImportedPdfFiles
+                        .map(
+                          (f) =>
+                            `${
+                              f.partNumber ? `भाग #${f.partNumber}` : f.name
+                            } (${f.sizeKb} KB)`
+                        )
+                        .join(' · ')}
+                    </div>
                   )}
                 </div>
               </div>
@@ -2546,17 +2841,18 @@ export function App() {
                 <span>
                   {portalVerifySubmitting
                     ? 'आधिकारिक ECI पोर्टल से सत्यापित हो रहा है...'
-                    : 'CAPTCHA सत्यापित करें व Client Storage में सेव करें'}
+                    : `चयनित ${portalSelectedPartNumbers.length} बूथ रोल (भाग #${portalSelectedPartNumbers.join(
+                        ','
+                      )}) सत्यापित व सेव करें`}
                 </span>
               </button>
             </form>
 
             <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-[11px] text-emerald-900 font-semibold leading-relaxed">
-              💡 <strong>LLM Council Audited (IndexedDB + LocalStorage):</strong>{' '}
-              जैसे ही आप यह CAPTCHA भरेंगे, आधिकारिक पोर्टल (`gateway-voters.eci.gov.in`)
-              से आपकी ग्राम पंचायत का सत्यापित डेटा <strong>FNV-1a Checksum</strong> के साथ
-              आपके फोन के <strong>IndexedDB + LocalStorage</strong> में सेव हो जाएगा।
-              कोई 5MB Quota लिमिट नहीं और न दोबारा CAPTCHA भरने की ज़रूरत!
+              💡 <strong>ECI बैच लॉगिन बाईपास (Selected Rolls Only):</strong>{' '}
+              ECI पोर्टल पर एक साथ पूरा बैच डाउनलोड करने पर लॉगिन/साइनअप मांगा जाता है,
+              लेकिन <strong>चयनित बूथ रोल (`partNumberList: [partNo]`)</strong> बिना लॉगिन के
+              सीधे सत्यापित होते हैं और आपके फोन के <strong>IndexedDB + LocalStorage</strong> में सेव हो जाते हैं।
             </div>
           </div>
         </div>

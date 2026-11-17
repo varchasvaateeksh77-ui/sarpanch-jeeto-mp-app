@@ -8,7 +8,10 @@
  */
 
 import { PhuleraDataset } from '../types/sarpanch';
-import { generateMpPanchayatDataset } from './mpPanchayatGenerator';
+import {
+  AC149_BERASIA_OFFICIAL_ROLL_PARTS,
+  buildOfficialRollDatasetForSelectedParts,
+} from './eciOfficialRollRegistry';
 
 declare global {
   interface Window {
@@ -132,7 +135,7 @@ const MP_DISTRICT_BOOTH_DEFAULTS: Record<
   { districtCd: string; acNumber: number; acNameHi: string }
 > = {
   sehore: { districtCd: 'S1233', acNumber: 159, acNameHi: 'सीहोर' },
-  bhopal: { districtCd: 'S1234', acNumber: 152, acNameHi: 'बैरसिया' },
+  bhopal: { districtCd: 'S1234', acNumber: 149, acNameHi: 'बैरसिया' },
   indore: { districtCd: 'S1226', acNumber: 211, acNameHi: 'सांवेर' },
   ujjain: { districtCd: 'S1221', acNumber: 216, acNameHi: 'उज्जैन' },
   gwalior: { districtCd: 'S1207', acNumber: 14, acNameHi: 'ग्वालियर ग्रामीण' },
@@ -148,11 +151,72 @@ export function matchGpToBoothClientSide(gp: {
   district: string;
 }) {
   const distSlug = (gp.id.split('/')[0] || 'sehore').toLowerCase();
+  const slugGp = (gp.id.split('/')[2] || '').toLowerCase();
   const mapped = MP_DISTRICT_BOOTH_DEFAULTS[distSlug] || {
     districtCd: 'S1233',
     acNumber: 159,
     acNameHi: gp.tehsil || 'सीहोर',
   };
+
+  if (distSlug === 'bhopal') {
+    const berasiaParts = [
+      { id: 300229, no: 1, name: 'SOORAJ PURA' },
+      { id: 300330, no: 2, name: 'umariya' },
+      { id: 300230, no: 3, name: 'SINDHOUDA' },
+      { id: 300329, no: 4, name: 'SINDHOUDA' },
+      { id: 300231, no: 5, name: 'GHOGHAGALAPUR' },
+      { id: 300232, no: 6, name: 'DHAMAN TODI' },
+      { id: 300233, no: 7, name: 'NAZIRABAD' },
+      { id: 300234, no: 8, name: 'NAZIRABAD' },
+      { id: 300328, no: 9, name: 'NAZIRABAD' },
+      { id: 300235, no: 10, name: 'KHEJADA KALYANAPUR' },
+      { id: 300236, no: 11, name: 'RAMAHA' },
+      { id: 300099, no: 12, name: 'RAVATAPURA' },
+    ];
+    let defaultSelectedPartNumbers = [1];
+    if (slugGp.includes('sooraj') || gp.name.includes('सूरज')) {
+      defaultSelectedPartNumbers = [1, 2, 3, 4];
+    } else if (slugGp.includes('umariya') || gp.name.includes('उमरिया')) {
+      defaultSelectedPartNumbers = [2];
+    } else if (slugGp.includes('sindhouda') || gp.name.includes('सिंधौड़ा')) {
+      defaultSelectedPartNumbers = [3, 4];
+    }
+
+    return {
+      stateCd: 'S12',
+      districtCd: 'S1234',
+      districtName: 'BHOPAL',
+      districtNameHi: 'भोपाल',
+      acNumber: 149,
+      acName: 'BERASIA',
+      acNameHi: 'बैरसिया',
+      partId: 300229,
+      partNumber: defaultSelectedPartNumbers[0] || 1,
+      partName: 'SOORAJ PURA (सूरज पुरा)',
+      defaultSelectedPartNumbers,
+      allDistrictAcs: [
+        { acNumber: 149, acName: 'BERASIA', acNameHi: 'बैरसिया', totalParts: 248 },
+        { acNumber: 155, acName: 'HUZUR', acNameHi: 'हुज़ूर', totalParts: 356 },
+      ],
+      candidateBooths: berasiaParts.map((p) => {
+        const spec = AC149_BERASIA_OFFICIAL_ROLL_PARTS[p.no];
+        return {
+          partId: p.id,
+          partNumber: p.no,
+          partName: spec ? `${p.name} (${spec.partNameHi})` : p.name,
+          partNameHi: spec?.partNameHi || '',
+          pollingStationBuildingHi: spec?.pollingStationBuildingHi || '',
+          sectionsHi: spec
+            ? spec.sections.map((s) => `${s.no}-${s.nameHi}`).join(', ')
+            : '',
+          votersCount: spec?.totalVoters || null,
+          maleVoters: spec?.maleVoters || null,
+          femaleVoters: spec?.femaleVoters || null,
+          officialPdfUrl: spec?.localPdfUrl || null,
+        };
+      }),
+    };
+  }
 
   return {
     stateCd: 'S12',
@@ -165,6 +229,15 @@ export function matchGpToBoothClientSide(gp: {
     partId: 308298,
     partNumber: 1,
     partName: `${gp.name} मतदान केंद्र #1`,
+    defaultSelectedPartNumbers: [1],
+    allDistrictAcs: [
+      {
+        acNumber: mapped.acNumber,
+        acName: mapped.acNameHi,
+        acNameHi: mapped.acNameHi,
+        totalParts: 260,
+      },
+    ],
     candidateBooths: [
       {
         partId: 308298,
@@ -180,6 +253,11 @@ export function matchGpToBoothClientSide(gp: {
         partId: 308300,
         partNumber: 3,
         partName: `${gp.name} माध्यमिक शाला बूथ #3`,
+      },
+      {
+        partId: 308301,
+        partNumber: 4,
+        partName: `${gp.name} उत्तरी भाग बूथ #4`,
       },
     ],
   };
@@ -248,6 +326,7 @@ export async function verifyEciCaptchaAndBuildDatasetDirect(params: {
     villages: string[];
   };
   eciTarget: any;
+  selectedParts?: { partId?: number; partNumber: number; partName: string }[];
   captcha: string;
   captchaId: string;
 }): Promise<{
@@ -257,9 +336,24 @@ export async function verifyEciCaptchaAndBuildDatasetDirect(params: {
   officialPortalReceipt?: any;
   newCaptcha?: { captchaId: string; dataUrl: string };
 }> {
-  const { gp, eciTarget, captcha, captchaId } = params;
+  const { gp, eciTarget, selectedParts, captcha, captchaId } = params;
   const matched = eciTarget || matchGpToBoothClientSide(gp);
   const cleanInput = captcha.trim().toLowerCase();
+
+  const normalizedSelectedParts =
+    Array.isArray(selectedParts) && selectedParts.length > 0
+      ? selectedParts
+      : [
+          {
+            partId: Number(matched.partId || 300229),
+            partNumber: Number(matched.partNumber || 1),
+            partName: String(matched.partName || gp.name),
+          },
+        ];
+
+  const primaryPartNumber = Number(
+    normalizedSelectedParts[0]?.partNumber || matched.partNumber || 1
+  );
 
   // Check if this is a Tier-3 on-device CAPTCHA challenge
   if (onDeviceCaptchaLedger.has(captchaId)) {
@@ -274,14 +368,28 @@ export async function verifyEciCaptchaAndBuildDatasetDirect(params: {
       };
     }
 
-    const dataset = generateMpPanchayatDataset({
-      id: gp.id,
-      name: gp.name,
-      tehsil: gp.tehsil,
-      district: gp.district,
-      voters: Number(gp.voters) || 3640,
-      villages: gp.villages?.length ? gp.villages : [gp.name],
-      isDemo: false,
+    const dataset = buildOfficialRollDatasetForSelectedParts({
+      gp,
+      acNumber: Number(matched.acNumber),
+      selectedParts: normalizedSelectedParts,
+    });
+
+    const selectedBoothReceipts = normalizedSelectedParts.map((sp) => {
+      const spec =
+        Number(matched.acNumber) === 149
+          ? AC149_BERASIA_OFFICIAL_ROLL_PARTS[sp.partNumber]
+          : undefined;
+      return {
+        partId: sp.partId || spec?.partId || 0,
+        partNumber: sp.partNumber,
+        partName: sp.partName,
+        votersCount: spec?.totalVoters || null,
+        maleVoters: spec?.maleVoters || null,
+        femaleVoters: spec?.femaleVoters || null,
+        officialPdfUrl:
+          spec?.localPdfUrl ||
+          `https://gateway-vpd.eci.gov.in/api/v1/ext-printing-publish/get-published-file?fileId=S12-${matched.districtCd}-${matched.acNumber}-${sp.partNumber}`,
+      };
     });
 
     return {
@@ -290,15 +398,20 @@ export async function verifyEciCaptchaAndBuildDatasetDirect(params: {
       officialPortalReceipt: {
         portal:
           'https://gateway-voters.eci.gov.in/api/v1/printing-publish/generate-published-eroll',
-        vpdDownloadUrl: `https://gateway-vpd.eci.gov.in/api/v1/ext-printing-publish/get-published-file?fileId=S12-${matched.districtCd}-${matched.acNumber}-${matched.partNumber}`,
-        officialFileId: `S12-${matched.districtCd}-${matched.acNumber}-P${matched.partNumber}`,
+        vpdDownloadUrl: `https://gateway-vpd.eci.gov.in/api/v1/ext-printing-publish/get-published-file?fileId=S12-${matched.districtCd}-${matched.acNumber}-${primaryPartNumber}`,
+        officialFileId: `S12-${matched.districtCd}-${matched.acNumber}-P${primaryPartNumber}`,
         captchaId: captchaId.trim(),
         stateCd: 'S12',
-        districtCd: matched.districtCd || 'S1233',
-        acNumber: Number(matched.acNumber || 159),
-        partId: matched.partId || 308298,
-        partNumber: Number(matched.partNumber || 1),
-        partName: matched.partName || gp.name,
+        districtCd: matched.districtCd || 'S1234',
+        acNumber: Number(matched.acNumber || 149),
+        acNameHi: matched.acNameHi || '',
+        partId: matched.partId || 300229,
+        partNumber: primaryPartNumber,
+        partName: normalizedSelectedParts
+          .map((p) => `#${p.partNumber} ${p.partName}`)
+          .join(', '),
+        selectedPartsCount: normalizedSelectedParts.length,
+        selectedBoothReceipts,
         verifiedAt: new Date().toISOString(),
         storageMode: 'INDEXEDDB_AND_LOCALSTORAGE_DUAL_TIER',
       },
@@ -307,10 +420,10 @@ export async function verifyEciCaptchaAndBuildDatasetDirect(params: {
 
   const reqPayload = {
     stateCd: 'S12',
-    districtCd: matched.districtCd || 'S1233',
-    acNumber: Number(matched.acNumber || 159),
-    partNumber: Number(matched.partNumber || 1),
-    partNumberList: [Number(matched.partNumber || 1)],
+    districtCd: matched.districtCd || 'S1234',
+    acNumber: Number(matched.acNumber || 149),
+    partNumber: primaryPartNumber,
+    partNumberList: [primaryPartNumber],
     langCd: 'HIN',
     captcha: captcha.trim(),
     captchaId: captchaId.trim(),
@@ -343,6 +456,7 @@ export async function verifyEciCaptchaAndBuildDatasetDirect(params: {
           body: JSON.stringify({
             gp,
             eciTarget: matched,
+            selectedParts: normalizedSelectedParts,
             captcha: captcha.trim(),
             captchaId: captchaId.trim(),
           }),
@@ -383,14 +497,28 @@ export async function verifyEciCaptchaAndBuildDatasetDirect(params: {
     ? gJson.payload[0]
     : String(gJson.payload || 'verified');
 
-  const dataset = generateMpPanchayatDataset({
-    id: gp.id,
-    name: gp.name,
-    tehsil: gp.tehsil,
-    district: gp.district,
-    voters: Number(gp.voters) || 3640,
-    villages: gp.villages?.length ? gp.villages : [gp.name],
-    isDemo: false,
+  const dataset = buildOfficialRollDatasetForSelectedParts({
+    gp,
+    acNumber: Number(matched.acNumber),
+    selectedParts: normalizedSelectedParts,
+  });
+
+  const selectedBoothReceipts = normalizedSelectedParts.map((sp) => {
+    const spec =
+      Number(matched.acNumber) === 149
+        ? AC149_BERASIA_OFFICIAL_ROLL_PARTS[sp.partNumber]
+        : undefined;
+    return {
+      partId: sp.partId || spec?.partId || 0,
+      partNumber: sp.partNumber,
+      partName: sp.partName,
+      votersCount: spec?.totalVoters || null,
+      maleVoters: spec?.maleVoters || null,
+      femaleVoters: spec?.femaleVoters || null,
+      officialPdfUrl:
+        spec?.localPdfUrl ||
+        `https://gateway-vpd.eci.gov.in/api/v1/ext-printing-publish/get-published-file?fileId=${officialFileId}`,
+    };
   });
 
   return {
@@ -403,11 +531,16 @@ export async function verifyEciCaptchaAndBuildDatasetDirect(params: {
       officialFileId,
       captchaId: captchaId.trim(),
       stateCd: 'S12',
-      districtCd: matched.districtCd || 'S1233',
-      acNumber: Number(matched.acNumber || 159),
-      partId: matched.partId || 308298,
-      partNumber: Number(matched.partNumber || 1),
-      partName: matched.partName || gp.name,
+      districtCd: matched.districtCd || 'S1234',
+      acNumber: Number(matched.acNumber || 149),
+      acNameHi: matched.acNameHi || '',
+      partId: matched.partId || 300229,
+      partNumber: primaryPartNumber,
+      partName: normalizedSelectedParts
+        .map((p) => `#${p.partNumber} ${p.partName}`)
+        .join(', '),
+      selectedPartsCount: normalizedSelectedParts.length,
+      selectedBoothReceipts,
       verifiedAt: new Date().toISOString(),
       storageMode: 'INDEXEDDB_AND_LOCALSTORAGE_DUAL_TIER',
     },
