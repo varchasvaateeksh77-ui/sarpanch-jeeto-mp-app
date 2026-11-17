@@ -76,7 +76,7 @@ test('karpathy/llm-council deAnonymizeRankingText annotates anonymous labels wit
   );
 });
 
-test('All 55 MP Districts and 1,800+ Gram Panchayats exist in places.json', () => {
+test('All 55 MP Districts and 1,800+ Gram Panchayats exist in places.json with zero duplicates and accurate geography', () => {
   const placesPath = path.resolve(process.cwd(), 'public/demo/places.json');
   const placesJson = JSON.parse(fs.readFileSync(placesPath, 'utf-8'));
   const districts = placesJson.d || [];
@@ -85,18 +85,98 @@ test('All 55 MP Districts and 1,800+ Gram Panchayats exist in places.json', () =
   let totalBlocks = 0;
   let totalGps = 0;
   let totalVillages = 0;
+  let globalGpDupes = 0;
+  let intraDistDupes = 0;
+  let leadingMatraErrors = 0;
+  const globalGpNames = new Set<string>();
+  const invalidMatraRegex = /(?:^|\s)[\u0900-\u0903\u093A-\u094F\u0951-\u0963]|[\u0903\u0933]/;
+
+  const toDedupKey = (str: string) =>
+    str
+      .normalize('NFKD')
+      .replace(/[\u0900-\u0903\u093A-\u094F\u0951-\u0963\s]/g, '');
+
   for (const d of districts) {
+    const distSeenNames = new Set<string>();
+    const distSeenKeys = new Set<string>();
     for (const b of d[2] || []) {
       totalBlocks++;
+      assert.equal(
+        !String(b[0]).endsWith('-gramin') && !String(b[0]).endsWith('-uttar'),
+        true,
+        `Block slug ${b[0]} in ${d[0]} should be a real Janpad Panchayat, not a synthetic -gramin/-uttar block`
+      );
+      assert.equal(
+        !String(b[1]).includes('&'),
+        true,
+        `Block name ${b[1]} in ${d[0]} should not merge two Janpads with &`
+      );
+
       for (const g of b[2] || []) {
         totalGps++;
-        totalVillages += Array.isArray(g[3]) ? g[3].length : 1;
+        const gpName = String(g[1]).normalize('NFKC').trim();
+        const gpKey = toDedupKey(gpName) || gpName;
+        if (invalidMatraRegex.test(gpName)) leadingMatraErrors++;
+        if (globalGpNames.has(gpName)) globalGpDupes++;
+        globalGpNames.add(gpName);
+
+        if (distSeenNames.has(gpName) || distSeenKeys.has(gpKey)) intraDistDupes++;
+        distSeenNames.add(gpName);
+        distSeenKeys.add(gpKey);
+
+        const vils: string[] = Array.isArray(g[3]) ? g[3] : [gpName];
+        totalVillages += vils.length;
+        for (const v of vils) {
+          const vName = String(v).normalize('NFKC').trim();
+          const vKey = toDedupKey(vName) || vName;
+          if (invalidMatraRegex.test(vName)) leadingMatraErrors++;
+          if (vName !== gpName) {
+            if (distSeenNames.has(vName) || distSeenKeys.has(vKey)) intraDistDupes++;
+            distSeenNames.add(vName);
+            distSeenKeys.add(vKey);
+          }
+        }
       }
     }
   }
-  assert.equal(totalBlocks >= 200, true, `Expected >=200 blocks, got ${totalBlocks}`);
-  assert.equal(totalGps >= 1500, true, `Expected >=1500 GPs, got ${totalGps}`);
-  assert.equal(totalVillages >= 4500, true, `Expected >=4500 villages, got ${totalVillages}`);
+
+  assert.equal(totalBlocks >= 240, true, `Expected >=240 real Janpad blocks, got ${totalBlocks}`);
+  assert.equal(totalGps >= 1800, true, `Expected >=1800 GPs, got ${totalGps}`);
+  assert.equal(totalVillages >= 5000, true, `Expected >=5000 villages, got ${totalVillages}`);
+  assert.equal(globalGpDupes, 0, `Expected 0 global duplicate GP names, got ${globalGpDupes}`);
+  assert.equal(intraDistDupes, 0, `Expected 0 intra-district duplicate names, got ${intraDistDupes}`);
+  assert.equal(leadingMatraErrors, 0, `Expected 0 leading matra errors, got ${leadingMatraErrors}`);
+
+  // Verify key geographical placements reported by user
+  const findDist = (slug: string) => districts.find((d: any) => d[0] === slug);
+  const bhopal = findDist('bhopal');
+  assert.deepEqual(
+    bhopal[2].map((b: any) => b[0]),
+    ['phanda', 'berasia'],
+    'Bhopal must have exactly Phanda (Huzur) and Berasia Janpad Panchayats'
+  );
+  const phandaGps = bhopal[2][0][2].map((g: any) => g[1]);
+  const berasiaGps = bhopal[2][1][2].map((g: any) => g[1]);
+  assert.equal(phandaGps.includes('अचारपुरा'), true, 'Acharpura must be in Phanda (Huzur), Bhopal');
+  assert.equal(phandaGps.includes('ईंटखेड़ी सड़क'), true, 'Intkhedi Sadak must be in Phanda (Huzur), Bhopal');
+  assert.equal(berasiaGps.includes('गुनगा'), true, 'Gunga must be in Berasia, Bhopal');
+
+  const ujjain = findDist('ujjain');
+  assert.equal(ujjain[2].length, 6, 'Ujjain must have all 6 real Janpad Panchayats');
+  const ujjainAllGps = ujjain[2].flatMap((b: any) => b[2].map((g: any) => g[1]));
+  assert.equal(ujjainAllGps.includes('अमझेरा'), false, 'Amjhera belongs to Dhar, not Ujjain');
+  assert.equal(ujjainAllGps.includes('इंगोरिया'), true, 'Ingoriya must be in Badnagar, Ujjain');
+  assert.equal(ujjainAllGps.includes('भाट पचलाना'), true, 'Bhat Pachlana must be in Badnagar, Ujjain');
+
+  const dhar = findDist('dhar');
+  const dharAllGps = dhar[2].flatMap((b: any) => b[2].map((g: any) => g[1]));
+  assert.equal(dharAllGps.includes('अमझेरा'), true, 'Amjhera must be in Dhar (Sardarpur)');
+
+  const sehore = findDist('sehore');
+  const sehoreAllGps = sehore[2].flatMap((b: any) => b[2].map((g: any) => g[1]));
+  assert.equal(sehoreAllGps.includes('महौदिया'), true, 'Mahodiya must be in Sehore');
+  assert.equal(sehoreAllGps.includes('धामंदा'), true, 'Dhamanda must be in Sehore');
+  assert.equal(sehoreAllGps.includes('अमलाहा'), true, 'Amlaha must be in Sehore (Ashta)');
 });
 
 test('Zero fake or generated phone numbers exist in generated MP Panchayats or buildFamilySummaries', () => {

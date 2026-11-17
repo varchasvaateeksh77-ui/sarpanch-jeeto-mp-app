@@ -159,6 +159,9 @@ export const PickPanchayatScreen: React.FC<PickPanchayatScreenProps> = ({
   const [selectedDistSlug, setSelectedDistSlug] = useState<string | null>(
     initialDistrictSlug || null
   );
+  const [selectedBlockSlug, setSelectedBlockSlug] = useState<string | null>(
+    null
+  );
 
   const selectedDistrict = useMemo(
     () =>
@@ -182,32 +185,52 @@ export const PickPanchayatScreen: React.FC<PickPanchayatScreenProps> = ({
       voters: number;
       villages: string[];
     }[] = [];
+    const seenDisplayKeys = new Set<string>();
+    const toDedupKey = (str: string) =>
+      str
+        .normalize('NFKD')
+        .replace(/[\u0900-\u0903\u093A-\u094F\u0951-\u0963\s]/g, '');
 
-    for (const blk of selectedDistrict[2] || []) {
+    const blocksToScan = selectedBlockSlug
+      ? (selectedDistrict[2] || []).filter((b) => b[0] === selectedBlockSlug)
+      : selectedDistrict[2] || [];
+
+    for (const blk of blocksToScan) {
       for (const gp of blk[2] || []) {
         const gpVoters = Number(gp[2]) || 3400;
         const vils =
           Array.isArray(gp[3]) && gp[3].length > 0 ? gp[3] : [gp[1]];
-        rows.push({
-          key: `gp-${gp[0]}`,
-          isVillage: false,
-          displayName: gp[1],
-          gpId: gp[0],
-          gpName: gp[1],
-          tehsil: blk[1],
-          district: `${selectedDistrict[1]} (मध्य प्रदेश)`,
-          voters: gpVoters,
-          villages: vils,
-        });
+        const gpDisplay = gp[1].normalize('NFKC').trim();
+        const gpDedupKey = toDedupKey(gpDisplay) || gpDisplay;
+        if (!seenDisplayKeys.has(gpDedupKey)) {
+          seenDisplayKeys.add(gpDedupKey);
+          rows.push({
+            key: `gp-${gp[0]}`,
+            isVillage: false,
+            displayName: gpDisplay,
+            gpId: gp[0],
+            gpName: gpDisplay,
+            tehsil: blk[1],
+            district: `${selectedDistrict[1]} (मध्य प्रदेश)`,
+            voters: gpVoters,
+            villages: vils,
+          });
+        }
 
         for (const vil of vils) {
-          if (vil !== gp[1]) {
+          const vilDisplay = vil.normalize('NFKC').trim();
+          const vilDedupKey = toDedupKey(vilDisplay) || vilDisplay;
+          if (
+            vilDisplay !== gpDisplay &&
+            !seenDisplayKeys.has(vilDedupKey)
+          ) {
+            seenDisplayKeys.add(vilDedupKey);
             rows.push({
-              key: `vil-${gp[0]}-${vil}`,
+              key: `vil-${gp[0]}-${vilDisplay}`,
               isVillage: true,
-              displayName: vil,
+              displayName: vilDisplay,
               gpId: gp[0],
-              gpName: gp[1],
+              gpName: gpDisplay,
               tehsil: blk[1],
               district: `${selectedDistrict[1]} (मध्य प्रदेश)`,
               voters: gpVoters,
@@ -238,7 +261,7 @@ export const PickPanchayatScreen: React.FC<PickPanchayatScreenProps> = ({
     return filtered.sort((a, b) =>
       a.displayName.localeCompare(b.displayName, 'hi')
     );
-  }, [selectedDistrict, searchQuery]);
+  }, [selectedDistrict, selectedBlockSlug, searchQuery]);
 
   // Global search across all 55 districts, blocks, GPs, and 5,000+ villages (supports Hindi + English/Hinglish)
   const globalMatchingGps = useMemo(() => {
@@ -316,6 +339,7 @@ export const PickPanchayatScreen: React.FC<PickPanchayatScreenProps> = ({
           onClick={() => {
             if (selectedDistrict) {
               setSelectedDistSlug(null);
+              setSelectedBlockSlug(null);
               setSearchQuery('');
             } else {
               onBack();
@@ -332,7 +356,7 @@ export const PickPanchayatScreen: React.FC<PickPanchayatScreenProps> = ({
         </h1>
         <p className="text-xs text-blue-100 mt-0.5 font-medium">
           {selectedDistrict
-            ? 'पंचायत चुनें'
+            ? `पंचायत चुनें · ${(selectedDistrict[2] || []).length} जनपद पंचायत`
             : electionType === 'ward'
             ? 'वार्ड पंच का चुनाव'
             : 'सरपंच का चुनाव'}
@@ -366,6 +390,40 @@ export const PickPanchayatScreen: React.FC<PickPanchayatScreenProps> = ({
             <Mic className="w-3.5 h-3.5" />
           </button>
         </div>
+
+        {selectedDistrict && (selectedDistrict[2] || []).length > 1 && (
+          <div className="mt-2.5 flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
+            <button
+              type="button"
+              onClick={() => setSelectedBlockSlug(null)}
+              className={`px-3 py-1 rounded-xl text-xs font-extrabold whitespace-nowrap transition-colors cursor-pointer ${
+                selectedBlockSlug === null
+                  ? 'bg-white text-[#1D4ED8]'
+                  : 'bg-blue-800/70 text-blue-100 hover:bg-blue-800'
+              }`}
+            >
+              सभी जनपद ({(selectedDistrict[2] || []).length})
+            </button>
+            {(selectedDistrict[2] || []).map((blk) => (
+              <button
+                key={blk[0]}
+                type="button"
+                onClick={() =>
+                  setSelectedBlockSlug(
+                    selectedBlockSlug === blk[0] ? null : blk[0]
+                  )
+                }
+                className={`px-3 py-1 rounded-xl text-xs font-extrabold whitespace-nowrap transition-colors cursor-pointer ${
+                  selectedBlockSlug === blk[0]
+                    ? 'bg-white text-[#1D4ED8]'
+                    : 'bg-blue-800/70 text-blue-100 hover:bg-blue-800'
+                }`}
+              >
+                {blk[1].replace(/\s*जनपद$/, '')}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="p-3.5 space-y-3 flex-1">
