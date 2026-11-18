@@ -256,6 +256,7 @@ export type AppRoute =
   | { screen: 'chat' }
   | { screen: 'refer' }
   | { screen: 'vansh' }
+  | { screen: 'rolls' }
   | { screen: 'xray'; tab?: 'overview' | 'vanshavali' | 'api' | 'schema' };
 
 export interface PlanItem {

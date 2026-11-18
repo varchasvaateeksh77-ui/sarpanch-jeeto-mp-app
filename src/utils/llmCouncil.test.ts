@@ -489,3 +489,64 @@ test('Official 2024 ECI Final Electoral Roll Revision-2 PDFs (AC 149 Berasia Par
   assert.equal(gridBoxes[29].estimatedSerialNumber, 30);
 });
 
+test('Zero 4-booth limit: Gram Panchayat supports 6, 8, or N polling booths and dynamically sums all selected booth rolls', () => {
+  // 6 booths selected for Sooraj Pura / Berasia GP: Parts 1, 2, 3, 4 + Part 5 (Keetai) + Part 6 (Kolu Khedi)
+  const sixBoothDataset = buildOfficialRollDatasetForSelectedParts({
+    gp: {
+      id: 'bhopal/berasia/sooraj-pura',
+      name: 'सूरज पुरा',
+      tehsil: 'बैरसिया जनपद',
+      district: 'भोपाल (मध्य प्रदेश)',
+      villages: ['सूरज पुरा', 'बाबूखेड़ी', 'उमरिया', 'सिंधौड़ा'],
+    },
+    acNumber: 149,
+    selectedParts: [
+      { partNumber: 1, partName: 'सूरज पुरा' },
+      { partNumber: 2, partName: 'उमरिया' },
+      { partNumber: 3, partName: 'सिंधौड़ा बूथ 1' },
+      { partNumber: 4, partName: 'सिंधौड़ा बूथ 2' },
+      { partNumber: 5, partName: 'कीतई (भाग 5)', votersCount: 910 },
+      { partNumber: 6, partName: 'कोलूखेड़ी (भाग 6)', votersCount: 890 },
+    ],
+  });
+
+  assert.deepEqual(sixBoothDataset.roll.booths, [1, 2, 3, 4, 5, 6]);
+  const sixBoothVoters = sixBoothDataset.roll.people.filter(
+    (p) => p.v === 1 && p.act === 1
+  );
+  // 3,539 (Parts 1..4) + 910 (Part 5) + 890 (Part 6) = 5,339 voters
+  assert.equal(sixBoothVoters.length, 3539 + 910 + 890);
+
+  // Verify exact voter counts exist in all 6 booths (1028, 841, 795, 875, 910, 890)
+  const expectedCounts = [1028, 841, 795, 875, 910, 890];
+  for (let bIdx = 1; bIdx <= 6; bIdx++) {
+    const boothVoters = sixBoothVoters.filter((p) => p.b === bIdx);
+    assert.equal(
+      boothVoters.length,
+      expectedCounts[bIdx - 1],
+      `Expected booth #${bIdx} to have ${expectedCounts[bIdx - 1]} voters, got ${boothVoters.length}`
+    );
+  }
+
+  // 8 booths selected for any large Gram Panchayat (e.g. Gunga with 8 polling booths)
+  const eightBoothDataset = buildOfficialRollDatasetForSelectedParts({
+    gp: {
+      id: 'bhopal/berasia/gunaga',
+      name: 'गुनगा',
+      tehsil: 'बैरसिया जनपद',
+      district: 'भोपाल (मध्य प्रदेश)',
+      villages: ['गुनगा', 'रतुआ', 'हर्राखेड़ा'],
+    },
+    acNumber: 149,
+    selectedParts: [10, 11, 12, 13, 14, 15, 16, 17],
+  });
+  assert.equal(eightBoothDataset.roll.booths.length, 8);
+  assert.deepEqual(eightBoothDataset.roll.booths, [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.equal(eightBoothDataset.roll.booth_names['8'].part, '17');
+  const eightBoothVoters = eightBoothDataset.roll.people.filter(
+    (p) => p.v === 1 && p.act === 1
+  );
+  assert.equal(eightBoothVoters.length > 6000, true);
+});
+
+

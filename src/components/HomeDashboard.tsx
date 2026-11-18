@@ -6,6 +6,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  FileText,
   GitBranch,
   Home,
   ListChecks,
@@ -44,6 +45,7 @@ interface HomeDashboardProps {
   candidates: CandidateInfo[];
   totalFamilies: number;
   totalWards: number;
+  totalBooths?: number;
   topFamilies: FamilySummary[];
   allFamilies?: FamilySummary[];
   allVoters?: PersonNode[];
@@ -71,6 +73,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
   candidates,
   totalFamilies,
   totalWards,
+  totalBooths,
   topFamilies,
   allFamilies = [],
   allVoters = [],
@@ -92,6 +95,17 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
   const [showInstallBanner, setShowInstallBanner] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
+
+  const activeBoothCount = useMemo(() => {
+    if (typeof totalBooths === 'number' && totalBooths > 0) return totalBooths;
+    const uniqueBooths = new Set<number>();
+    for (const v of allVoters) {
+      if (v.v === 1 && v.act === 1 && v.b) {
+        uniqueBooths.add(Number(v.b));
+      }
+    }
+    return Math.max(uniqueBooths.size, 1);
+  }, [totalBooths, allVoters]);
 
   const c2Name =
     candidates.find((c) => c.id === 2)?.name || 'विपक्ष उम्मीदवार 1';
@@ -319,7 +333,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
             )}
             <p className="text-sm text-blue-100 mt-0.5 tabular-nums font-medium">
               {tally.totalVoters.toLocaleString('en-IN')} वोट · {totalFamilies}{' '}
-              परिवार · {totalWards} वार्ड
+              परिवार · {totalWards} वार्ड · {activeBoothCount} बूथ रोल
             </p>
           </div>
 
@@ -657,6 +671,36 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
           </div>
           <span className="w-11 h-11 rounded-full bg-[#DC2626] text-white flex items-center justify-center shrink-0">
             <Play className="w-5 h-5 fill-current ml-0.5" />
+          </span>
+        </button>
+
+        {/* Dedicated ECI Booth Roll Manager Card: View Downloaded Rolls & Download Unlimited Additional Rolls */}
+        <button
+          type="button"
+          onClick={() => onNavigate({ screen: 'rolls' })}
+          className="w-full bg-white rounded-2xl p-3.5 border-2 border-emerald-500/80 hover:border-emerald-600 flex items-center justify-between text-left transition-colors cursor-pointer"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-11 h-11 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
+              <FileText className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-sm font-extrabold text-slate-900">
+                  मतदाता सूची व बूथ रोल प्रबंधक
+                </span>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 text-[10px] font-extrabold tabular-nums">
+                  {activeBoothCount} बूथ रोल सक्रिय
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-600 font-semibold mt-0.5 truncate">
+                डाउनलोड किए गए रोल देखें · + और नए बूथ (5, 6, 8, 12+ बूथ) जोड़ें
+              </div>
+            </div>
+          </div>
+          <span className="px-2.5 py-1.5 rounded-xl bg-[#16A34A] text-white text-xs font-extrabold shrink-0 flex items-center gap-1">
+            <span>रोल प्रबंधित करें</span>
+            <ChevronRight className="w-3.5 h-3.5" />
           </span>
         </button>
 

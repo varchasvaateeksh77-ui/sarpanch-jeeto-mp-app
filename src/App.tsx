@@ -102,6 +102,10 @@ import {
   SupportChatScreen,
   VideoWalkthroughModal,
 } from './components/KaamAndChatScreens';
+import {
+  ActiveBoothRollItem,
+  BoothRollManagerScreen,
+} from './components/BoothRollManagerScreen';
 import bundledPlacesJson from '../public/demo/places.json';
 import bundledPlansJson from '../public/demo/plans.json';
 import bundledLiveSamplesJson from '../public/demo/live_samples.json';
@@ -182,6 +186,7 @@ export function App() {
       return { screen: 'parchiset' };
     if (hash === 'ummidwar') return { screen: 'ummidwar' };
     if (hash === 'refer') return { screen: 'refer' };
+    if (hash === 'rolls' || hash === 'booths') return { screen: 'rolls' };
     if (hash === 'start') return { screen: 'start' };
     if (hash === 'landing') return { screen: 'landing' };
     if (hash === 'xray' || hash === 'council') return { screen: 'xray' };
@@ -1609,6 +1614,188 @@ export function App() {
     openPortalCaptchaModalForGp(gp);
   };
 
+  const handleApplyUpdatedBoothRolls = async (params: {
+    acNumber: number;
+    acNameHi: string;
+    districtCd: string;
+    updatedRolls: ActiveBoothRollItem[];
+    captcha?: string;
+    captchaId?: string;
+  }): Promise<{
+    ok: boolean;
+    message?: string;
+    newCaptcha?: { captchaId: string; dataUrl: string };
+  }> => {
+    const selectedBoothObjects = params.updatedRolls.map((r) => ({
+      partId: r.partId || Number(`${params.acNumber}00${r.partNumber}`),
+      partNumber: r.partNumber,
+      partName: r.partName,
+      votersCount: r.votersCount,
+      officialPdfUrl: r.officialPdfUrl || null,
+    }));
+
+    const primaryBooth = selectedBoothObjects[0] || {
+      partId: Number(`${params.acNumber}0001`),
+      partNumber: 1,
+      partName: `${activePanchayat.name} बूथ 1`,
+    };
+
+    const effectiveEciTarget = {
+      stateCd: 'S12',
+      districtCd: params.districtCd || 'S1234',
+      acNumber: params.acNumber || 149,
+      acNameHi: params.acNameHi || activePanchayat.tehsil,
+      partId: primaryBooth.partId,
+      partNumber: primaryBooth.partNumber,
+      partName: primaryBooth.partName,
+    };
+
+    // Case 1: Live ECI CAPTCHA verification when downloading new booth rolls from ECI portal
+    if (params.captcha && params.captchaId) {
+      let j: any = null;
+      let okResp = false;
+
+      if (
+        !isRunningInStandaloneAndroidApk() &&
+        !params.captchaId.startsWith('ECI-MP-')
+      ) {
+        try {
+          const r = await fetch('/api/eci/verify-and-fetch-gp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              gp: activePanchayat,
+              eciTarget: effectiveEciTarget,
+              selectedParts: selectedBoothObjects,
+              captcha: params.captcha,
+              captchaId: params.captchaId,
+            }),
+          });
+          j = await r.json();
+          okResp = r.ok && Boolean(j?.ok);
+        } catch {
+          j = null;
+        }
+      }
+
+      if (!j) {
+        const directRes = await verifyEciCaptchaAndBuildDatasetDirect({
+          gp: activePanchayat,
+          eciTarget: effectiveEciTarget,
+          selectedParts: selectedBoothObjects,
+          captcha: params.captcha,
+          captchaId: params.captchaId,
+        });
+        j = directRes;
+        okResp = directRes.ok;
+      }
+
+      if (!okResp || !j?.ok) {
+        return {
+          ok: false,
+          message:
+            j?.message ||
+            'ECI पोर्टल ने CAPTCHA अमान्य बताया। कृपया नया CAPTCHA भरें।',
+          newCaptcha: j?.newCaptcha,
+        };
+      }
+
+      const dataset = j.dataset as PhuleraDataset;
+      const receipt = j.officialPortalReceipt;
+      const savedBundle = await savePortalPanchayatToClientStorage(
+        activePanchayat,
+        dataset,
+        receipt
+      );
+      setPortalStorageTier('indexeddb+localstorage');
+
+      const nextVotersCount = dataset.roll.people.filter(
+        (p) => p.v === 1 && p.act === 1
+      ).length;
+      const boothNames: Record<string, string> = {};
+      for (const [k, v] of Object.entries(dataset.roll.booth_names || {})) {
+        boothNames[k] = (v as { name: string }).name;
+      }
+
+      setCachedPortalDataset(dataset);
+      setOfficialPortalReceipt(savedBundle.officialPortalReceipt);
+      setActivePanchayat((prev) => ({
+        ...prev,
+        voters: nextVotersCount,
+        boothNames,
+      }));
+      hydrateCampaignStateFromDataset(dataset);
+      await hydrateLocalOverlayForGp(activePanchayat.id);
+      postLiveMutation({
+        type: 'switch_panchayat',
+        ...activePanchayat,
+        voters: nextVotersCount,
+      });
+
+      return { ok: true };
+    }
+
+    // Case 2: Instant local rebuild (removing an existing booth roll or adding local .pdf files)
+    const nextDataset = buildOfficialRollDatasetForSelectedParts({
+      gp: activePanchayat,
+      acNumber: params.acNumber,
+      selectedParts: selectedBoothObjects,
+    });
+    const nextVotersCount = nextDataset.roll.people.filter(
+      (p) => p.v === 1 && p.act === 1
+    ).length;
+
+    const updatedReceipt = {
+      ...(officialPortalReceipt || {}),
+      verified: true,
+      verifiedAt: new Date().toISOString(),
+      stateCd: 'S12',
+      districtCd: params.districtCd || 'S1234',
+      acNumber: params.acNumber || 149,
+      acNameHi: params.acNameHi || activePanchayat.tehsil,
+      partId: primaryBooth.partId,
+      partNumber: primaryBooth.partNumber,
+      partName: primaryBooth.partName,
+      selectedPartsCount: selectedBoothObjects.length,
+      selectedBoothReceipts: selectedBoothObjects.map((b) => ({
+        partId: b.partId,
+        partNumber: b.partNumber,
+        partName: b.partName,
+        officialPdfUrl: b.officialPdfUrl || null,
+        officialVotersCount: b.votersCount || null,
+      })),
+    };
+
+    const savedBundle = await savePortalPanchayatToClientStorage(
+      activePanchayat,
+      nextDataset,
+      updatedReceipt
+    );
+    setPortalStorageTier('indexeddb+localstorage');
+
+    const boothNames: Record<string, string> = {};
+    for (const [k, v] of Object.entries(nextDataset.roll.booth_names || {})) {
+      boothNames[k] = (v as { name: string }).name;
+    }
+
+    setCachedPortalDataset(nextDataset);
+    setOfficialPortalReceipt(savedBundle.officialPortalReceipt);
+    setActivePanchayat((prev) => ({
+      ...prev,
+      voters: nextVotersCount,
+      boothNames,
+    }));
+    hydrateCampaignStateFromDataset(nextDataset);
+    await hydrateLocalOverlayForGp(activePanchayat.id);
+    postLiveMutation({
+      type: 'switch_panchayat',
+      ...activePanchayat,
+      voters: nextVotersCount,
+    });
+
+    return { ok: true };
+  };
+
   const handleSimulateWorkerTick = () => {
     postLiveMutation({
       type: 'simulate_worker_tick',
@@ -1793,6 +1980,20 @@ export function App() {
             चुनाव रिज़ल्ट (55 ज़िले)
           </a>
           <a
+            href="#rolls"
+            onClick={(e) => {
+              e.preventDefault();
+              setRoute({ screen: 'rolls' });
+            }}
+            className={`hover:text-[#1D4ED8] transition-colors whitespace-nowrap shrink-0 ${
+              route.screen === 'rolls'
+                ? 'text-[#1D4ED8] underline underline-offset-4'
+                : ''
+            }`}
+          >
+            बूथ रोल प्रबंधक ({effectivePhuleraData.roll.booths.length} बूथ)
+          </a>
+          <a
             href="#xray"
             onClick={(e) => {
               e.preventDefault();
@@ -1896,29 +2097,32 @@ export function App() {
                       {portalStorageTier === 'indexeddb+localstorage'
                         ? 'IndexedDB + LocalStorage'
                         : 'Client Storage'}{' '}
-                      (बूथ #{officialPortalReceipt.partNumber}{' '}
-                      {officialPortalReceipt.partName} · ID:{' '}
-                      {String(officialPortalReceipt.officialFileId || '').slice(
-                        0,
-                        8
-                      )}
-                      )
+                      ({effectivePhuleraData.roll.booths.length} बूथ रोल ·{' '}
+                      {tally.totalVoters.toLocaleString('en-IN')} वोटर)
                     </div>
                   ) : (
                     <div className="truncate">
-                      ⚡ &apos;{activePanchayat.name}&apos; को ECI CAPTCHA से
-                      Client Storage (IndexedDB) में सेव करें
+                      ⚡ &apos;{activePanchayat.name}&apos; ({effectivePhuleraData.roll.booths.length} बूथ रोल · {tally.totalVoters.toLocaleString('en-IN')} वोटर)
                     </div>
                   )}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      handleActivatePanchayat(activePanchayat, true)
-                    }
-                    className="shrink-0 px-2 py-0.5 rounded bg-white/15 hover:bg-white/25 text-white text-[10px] font-extrabold cursor-pointer"
-                  >
-                    {officialPortalReceipt ? 'दोबारा सिंक ↻' : 'CAPTCHA भरें →'}
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setRoute({ screen: 'rolls' })}
+                      className="px-2 py-0.5 rounded bg-emerald-500/30 hover:bg-emerald-500/45 border border-emerald-400/40 text-white text-[10px] font-extrabold cursor-pointer"
+                    >
+                      बूथ रोल ({effectivePhuleraData.roll.booths.length}) →
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleActivatePanchayat(activePanchayat, true)
+                      }
+                      className="px-2 py-0.5 rounded bg-white/15 hover:bg-white/25 text-white text-[10px] font-extrabold cursor-pointer"
+                    >
+                      {officialPortalReceipt ? 'सिंक ↻' : 'CAPTCHA →'}
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -1939,6 +2143,7 @@ export function App() {
                   candidates={effectivePhuleraData.camp.candidates}
                   totalFamilies={families.length}
                   totalWards={effectivePhuleraData.roll.wards.length}
+                  totalBooths={effectivePhuleraData.roll.booths.length}
                   topFamilies={sortedFamiliesBySize.slice(0, 3)}
                   allFamilies={families}
                   allVoters={effectivePhuleraData.roll.people}
@@ -2353,6 +2558,25 @@ export function App() {
                   families={sortedFamiliesBySize}
                   onBack={() => setRoute({ screen: 'more' })}
                   onNavigate={(r) => setRoute(r)}
+                  onToast={triggerToast}
+                />
+              )}
+
+              {route.screen === 'rolls' && (
+                <BoothRollManagerScreen
+                  activePanchayat={{
+                    id: activePanchayat.id,
+                    name: effectivePhuleraData.roll.name,
+                    tehsil: effectivePhuleraData.roll.tehsil,
+                    district: effectivePhuleraData.roll.district,
+                    voters: tally.totalVoters,
+                    villages: activePanchayat.villages,
+                  }}
+                  dataset={effectivePhuleraData}
+                  officialPortalReceipt={officialPortalReceipt}
+                  onBack={() => setRoute({ screen: 'home' })}
+                  onNavigate={(r) => setRoute(r)}
+                  onApplyUpdatedBoothRolls={handleApplyUpdatedBoothRolls}
                   onToast={triggerToast}
                 />
               )}

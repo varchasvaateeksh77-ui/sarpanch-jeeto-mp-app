@@ -594,12 +594,11 @@ export function generateMpPanchayatDataset(info: {
   const region = getRegionForDistrictSlug(distSlug);
   const curated = CURATED_GP_OVERRIDES[gpId];
 
-  // Determine exact voter count (never falling back to a single constant)
+  // Determine exact voter count (explicit info.voters always takes priority when provided)
   const targetVoters =
-    curated?.voters ||
-    (info.voters && info.voters !== 2480
+    info.voters && info.voters > 0 && info.voters !== 2480
       ? info.voters
-      : 2950 + (seed % 2650));
+      : curated?.voters || 2950 + (seed % 2650);
 
   // Determine ward count (12 to 20 wards as per MP Panchayat Raj Act)
   const totalWards =
@@ -613,7 +612,7 @@ export function generateMpPanchayatDataset(info: {
       : 12 + (seed % 3));
 
   const wards = Array.from({ length: totalWards }, (_, i) => i + 1);
-  const totalBooths = Math.max(3, Math.min(8, Math.round(targetVoters / 860)));
+  const totalBooths = Math.max(1, Math.round(targetVoters / 860));
   const booths = Array.from({ length: totalBooths }, (_, i) => i + 1);
 
   const rawVillages =

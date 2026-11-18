@@ -344,16 +344,18 @@ export async function verifyEciCaptchaAndBuildDatasetDirect(params: {
   const matched = eciTarget || matchGpToBoothClientSide(gp);
   const cleanInput = captcha.trim().toLowerCase();
 
-  const normalizedSelectedParts =
+  const explicitSelectedParts =
     Array.isArray(selectedParts) && selectedParts.length > 0
       ? selectedParts
-      : [
-          {
-            partId: Number(matched.partId || 300229),
-            partNumber: Number(matched.partNumber || 1),
-            partName: String(matched.partName || gp.name),
-          },
-        ];
+      : undefined;
+
+  const normalizedSelectedParts = explicitSelectedParts || [
+    {
+      partId: Number(matched.partId || 300229),
+      partNumber: Number(matched.partNumber || 1),
+      partName: String(matched.partName || gp.name),
+    },
+  ];
 
   const primaryPartNumber = Number(
     normalizedSelectedParts[0]?.partNumber || matched.partNumber || 1
@@ -375,7 +377,7 @@ export async function verifyEciCaptchaAndBuildDatasetDirect(params: {
     const dataset = buildOfficialRollDatasetForSelectedParts({
       gp,
       acNumber: Number(matched.acNumber),
-      selectedParts: normalizedSelectedParts,
+      selectedParts: explicitSelectedParts,
     });
 
     const selectedBoothReceipts = normalizedSelectedParts.map((sp) => {
